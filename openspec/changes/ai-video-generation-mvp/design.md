@@ -246,3 +246,39 @@ CREATE TABLE queue_jobs (
 5. **Session cleanup in D1** — Should we implement TTL-based deletion of old sessions? D1 doesn't have auto-expiration like some NoSQL databases.
 
 6. **Video URL permanence** — magnific.com URLs: confirmed temporary? How long do they last? Should we download to R2 immediately vs lazy?
+
+## Implementation Notes / Deviations (as built)
+
+The implementation intentionally diverged from parts of this design to honor the
+overriding "simplest implementation possible" directive. Recorded here so the
+design matches reality:
+
+- **No Durable Objects.** The `SessionCoordinator` DO was removed. Per-chunk
+  coordination is unnecessary because the image→video handoff happens directly
+  in the queue consumers, and the 30s stagger is achieved with queue
+  `delaySeconds` (`i * 30`) rather than a coordinator. This also eliminated a
+  startup binding error. (Resolves Open Question #2.)
+
+- **Single Worker entry, not Next.js.** The frontend is a self-contained static
+  SPA in `public/index.html` (React via htm + Tailwind over CDN, no build step),
+  served by the same Worker that hosts the API. One deployment, same origin, no
+  CORS. The `frontend/` Next.js app in the original plan was not created.
+
+- **No separate `queue_jobs` table used.** Queue state is managed by Cloudflare
+  Queues itself (retries via `message.retry()`, up to 3). Chunk status +
+  `error` column on `chunks` capture everything the UI needs; the `tasks` /
+  `queue_jobs` tables are unused in the MVP. An `error` column was added to
+  `chunks` (migration `0002`).
+
+- **Video stored as magnific.com URL, not R2.** Per the MVP decision (Option B),
+  completed videos keep their magnific.com URL in D1; the UI notes a ~2-day
+  expiry. R2 binding + credentials are wired but download-to-R2 is deferred.
+  (Defers Open Question #6.)
+
+- **Webhook correlation uses `sessionId` + `chunkId`** (not `chunkId` alone),
+  since user-supplied chunk IDs are not globally unique. Idempotency guard added.
+  (Resolves Open Question #4.)
+
+- **Mock-first.** `ENVIRONMENT !== 'production'` short-circuits all external API
+  calls (`src/lib/generation.ts`); mock video "completes" inline to avoid the
+  `global_fetch_strictly_public` restriction on fetching localhost.

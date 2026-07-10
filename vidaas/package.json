@@ -7,7 +7,13 @@
     "dev": "wrangler dev",
     "start": "wrangler dev",
     "test": "vitest",
-    "cf-typegen": "wrangler types"
+    "typecheck": "tsc --noEmit",
+    "cf-typegen": "wrangler types",
+    "ngrok": "ngrok http 8787",
+    "db:migrate:local": "wrangler d1 execute vidaas --local --file src/migrations/0001_init.sql && wrangler d1 execute vidaas --local --file src/migrations/0002_add_error_column.sql",
+    "db:migrate:remote": "wrangler d1 execute vidaas --remote --file src/migrations/0001_init.sql && wrangler d1 execute vidaas --remote --file src/migrations/0002_add_error_column.sql",
+    "queues:create": "wrangler queues create image-generation && wrangler queues create video-generation",
+    "r2:create": "wrangler r2 bucket create vidaas-videos --jurisdiction eu"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.12.4",

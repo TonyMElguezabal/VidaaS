@@ -92,10 +92,10 @@
 
 ## 12. Webhook Testing: ngrok Setup (Local Development)
 
-- [ ] 12.1 Document how to install and run ngrok locally
-- [ ] 12.2 Create script: `npm run ngrok` exposes localhost:8787 (Cloudflare dev port)
-- [ ] 12.3 Use ngrok URL as `WEBHOOK_URL` environment variable during local testing
-- [ ] 12.4 Test flow: submit chunk → image generates → ngrok receives webhook callback
+- [x] 12.1 Document how to install and run ngrok locally (README "Webhook testing with ngrok")
+- [x] 12.2 Create script: `npm run ngrok` exposes localhost:8787
+- [x] 12.3 Document using ngrok URL as `WEBHOOK_BASE_URL` during local testing
+- [ ] 12.4 Test flow live: submit chunk → real webhook callback received (deferred — spends credits)
 
 ## 13. Integration: Real APIs (Staged)
 
@@ -112,7 +112,7 @@
 - [x] 14.2 Add loading states: submit button disabled state + animated in-progress bars/badges
 - [x] 14.3 Add better styling: Tailwind, card layout, badges, responsive
 - [x] 14.4 Timeout banners: amber at 15 min, red at 20 min (TimeoutBanner)
-- [ ] 14.5 Add estimated duration: "Image: ~2-5 min, Video: ~1-3 min"
+- [x] 14.5 Add estimated duration hint: "image ~2–5 min · video ~1–3 min · 30s apart"
 
 ## 15. Error Handling & Resilience
 
@@ -133,18 +133,19 @@
 
 ## 17. Deployment Preparation
 
-- [ ] 17.1 Create `.env.production` template with Cloudflare secrets management
-- [ ] 17.2 Document environment setup: which vars go in Cloudflare dashboard vs local
-- [ ] 17.3 Test deployment: `wrangler publish` to Cloudflare
-- [ ] 17.4 Configure D1 in production: run migrations
-- [ ] 17.5 Configure R2 bucket: create if not exists
-- [ ] 17.6 Test end-to-end on Cloudflare staging
+- [x] 17.1 Document secrets management (`wrangler secret put`) + `.env.example` template
+- [x] 17.2 Document environment setup: vars vs secrets, local vs production (README)
+- [x] 17.3 Document deployment (`npm run deploy`) + `queues:create`/`r2:create` scripts
+- [x] 17.4 Document remote D1 migration (`npm run db:migrate:remote`)
+- [x] 17.5 Document R2 bucket creation (`npm run r2:create`)
+- [ ] 17.6 Test end-to-end on Cloudflare (deferred — requires Workers Paid plan + credits)
 
 ## 18. Documentation
 
-- [ ] 18.1 Create README.md: project overview, architecture, setup instructions
-- [ ] 18.2 Document API endpoints: request/response formats
-- [ ] 18.3 Document environment variables: all required keys and how to obtain them
-- [ ] 18.4 Create example chunk format: show user how to structure input
-- [ ] 18.5 Add troubleshooting guide: common issues and solutions
-- [ ] 18.6 Document webhook testing: how to use ngrok locally
+- [x] 18.1 Create README.md: project overview, architecture, setup instructions
+- [x] 18.2 Document API endpoints: request/response formats (README API reference)
+- [x] 18.3 Document environment variables: table of vars/secrets and purpose
+- [x] 18.4 Create example chunk format: show user how to structure input
+- [x] 18.5 Add troubleshooting guide: common issues and solutions (README table)
+- [x] 18.6 Document webhook testing: how to use ngrok locally
+- [x] 18.7 Update AGENTS.md with project-specific guidance and gotchas

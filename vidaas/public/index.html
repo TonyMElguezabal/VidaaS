@@ -296,6 +296,10 @@ VIDEO: Warry notices the toxic leak and quickly steps back with a serious expres
 
 							<${TimeoutBanner} createdAt=${createdAt} chunks=${chunks} />
 
+							${!allDone(chunks) && html`<p class="text-[11px] text-slate-400">
+								Estimated per chunk: image ~2–5 min · video ~1–3 min. Chunks start 30s apart.
+							</p>`}
+
 							<div class="space-y-3">
 								${chunks.map(c => html`<${ChunkCard} key=${c.id} chunk=${c} onRetry=${retry} />`)}
 							</div>
