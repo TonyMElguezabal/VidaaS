@@ -3,30 +3,313 @@
 	<head>
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<title>Hello, World!</title>
+		<title>VidaaS — AI Image & Video Generation</title>
+		<script src="https://cdn.tailwindcss.com"></script>
+		<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+		<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+		<script src="https://unpkg.com/htm@3.1.1/dist/htm.js"></script>
+		<style>
+			@keyframes pulse-bar { 0%,100% { opacity: 1 } 50% { opacity: .55 } }
+			.animate-pulse-bar { animation: pulse-bar 1.4s ease-in-out infinite }
+		</style>
 	</head>
-	<body>
-		<h1 id="heading"></h1>
-		<p>This page comes from a static asset stored at `public/index.html` as configured in `wrangler.jsonc`.</p>
-		<button id="button" type="button">Fetch a random UUID</button>
-		<output id="random" for="button"></output>
+	<body class="bg-slate-50 text-slate-800">
+		<div id="root"></div>
 		<script>
-			fetch('/message')
-				.then((resp) => resp.text())
-				.then((text) => {
-					const h1 = document.getElementById('heading');
-					h1.textContent = text;
-				});
+			const { useState, useEffect, useRef, useCallback } = React;
+			const html = htm.bind(React.createElement);
 
-			const button = document.getElementById("button");
-			button.addEventListener("click", () => {
-				fetch('/random')
-					.then((resp) => resp.text())
-					.then((text) => {
-						const random = document.getElementById('random');
-						random.textContent = text;
-					});
-			});
+			// --- constants -------------------------------------------------------
+			const POLL_MS = 2000;
+			const LS_KEY = 'vidaas.session';
+			const WARN_MIN = 15;      // amber banner
+			const TIMEOUT_MIN = 20;   // red banner
+
+			const EXAMPLE = `—
+ID: 1
+PROMPT: "Rule number three is to eliminate high-interest debt as fast as humanly possible."
+IMAGE: Warry charges forward with a giant pair of scissors cutting through thick chains labeled "High-Interest Debt" wrapped around his wallet and legs.
+VIDEO: Warry firmly cuts the chains and immediately stands taller with a determined smile. No camera movement, just face gestures.
+—
+ID: 2
+PROMPT: "Debt at those rates is financially toxic."
+IMAGE: A leaking barrel marked "20% Interest" spills bright green toxic liquid toward Warry's savings while warning symbols surround the area.
+VIDEO: Warry notices the toxic leak and quickly steps back with a serious expression. No camera movement, just face gestures.
+—`;
+
+			const STAGE = {
+				'submitted':         { pct: 5,   label: 'Queued',           tone: 'slate' },
+				'image-generating':  { pct: 30,  label: 'Generating image', tone: 'blue' },
+				'image-complete':    { pct: 55,  label: 'Image ready',      tone: 'blue' },
+				'video-generating':  { pct: 80,  label: 'Generating video', tone: 'blue' },
+				'complete':          { pct: 100, label: 'Complete',         tone: 'green' },
+				'failed':            { pct: 100, label: 'Failed',           tone: 'red' },
+			};
+
+			const TONE = {
+				slate: { bar: 'bg-slate-400',  badge: 'bg-slate-100 text-slate-600' },
+				blue:  { bar: 'bg-blue-500',   badge: 'bg-blue-100 text-blue-700' },
+				green: { bar: 'bg-emerald-500',badge: 'bg-emerald-100 text-emerald-700' },
+				red:   { bar: 'bg-red-500',    badge: 'bg-red-100 text-red-700' },
+			};
+
+			// --- localStorage helpers -------------------------------------------
+			function saveSession(sessionId, expiresAt, chunks) {
+				try {
+					localStorage.setItem(LS_KEY, JSON.stringify({
+						sessionId, expiresAt, createdAt: Date.now(),
+						// references / URLs only — never binary content
+						chunks: (chunks || []).map(c => ({
+							id: c.id, status: c.status, imageUrl: c.imageUrl, videoUrl: c.videoUrl,
+						})),
+					}));
+				} catch (e) { /* ignore quota errors */ }
+			}
+			function loadSession() {
+				try {
+					const raw = localStorage.getItem(LS_KEY);
+					if (!raw) return null;
+					const s = JSON.parse(raw);
+					if (s.expiresAt && new Date(s.expiresAt).getTime() < Date.now()) {
+						localStorage.removeItem(LS_KEY);
+						return null;
+					}
+					return s;
+				} catch (e) { return null; }
+			}
+			function clearSession() { try { localStorage.removeItem(LS_KEY); } catch (e) {} }
+
+			const allDone = (chunks) =>
+				chunks.length > 0 && chunks.every(c => c.status === 'complete' || c.status === 'failed');
+
+			// --- components ------------------------------------------------------
+			function Badge({ status }) {
+				const s = STAGE[status] || STAGE['submitted'];
+				const t = TONE[s.tone];
+				const spin = s.tone === 'blue';
+				return html`<span class=${'inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ' + t.badge}>
+					${spin && html`<span class="h-1.5 w-1.5 rounded-full bg-current animate-pulse"></span>`}
+					${s.label}
+				</span>`;
+			}
+
+			function ProgressBar({ status }) {
+				const s = STAGE[status] || STAGE['submitted'];
+				const t = TONE[s.tone];
+				const active = s.tone === 'blue';
+				return html`<div class="h-2 w-full rounded-full bg-slate-100 overflow-hidden">
+					<div class=${'h-full rounded-full transition-all duration-700 ' + t.bar + (active ? ' animate-pulse-bar' : '')}
+						 style=${{ width: s.pct + '%' }}></div>
+				</div>`;
+			}
+
+			function ChunkCard({ chunk, onRetry }) {
+				const s = STAGE[chunk.status] || STAGE['submitted'];
+				return html`<div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+					<div class="flex items-start justify-between gap-3">
+						<div class="min-w-0">
+							<div class="flex items-center gap-2">
+								<span class="text-xs font-mono text-slate-400">#${chunk.id}</span>
+								<${Badge} status=${chunk.status} />
+							</div>
+							<p class="mt-1 text-sm text-slate-600 line-clamp-2">${chunk.prompt || chunk.imagePrompt || ''}</p>
+						</div>
+					</div>
+
+					<div class="mt-3"><${ProgressBar} status=${chunk.status} /></div>
+
+					${chunk.status === 'failed' && html`
+						<div class="mt-3 rounded-lg bg-red-50 border border-red-200 p-3">
+							<p class="text-xs text-red-700">${chunk.error || 'Generation failed.'}</p>
+							<button onClick=${() => onRetry(chunk.id)}
+								class="mt-2 inline-flex items-center gap-1 rounded-md bg-red-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-700">
+								↻ Retry
+							</button>
+						</div>`}
+
+					${(chunk.imageUrl || chunk.videoUrl) && html`
+						<div class="mt-3 grid grid-cols-2 gap-3">
+							${chunk.imageUrl && html`<figure>
+								<img src=${chunk.imageUrl} alt="generated image"
+									class="w-full aspect-video object-cover rounded-lg border border-slate-200 bg-slate-100" loading="lazy" />
+								<figcaption class="mt-1 text-[10px] uppercase tracking-wide text-slate-400">Image</figcaption>
+							</figure>`}
+							${chunk.videoUrl && html`<figure>
+								<video src=${chunk.videoUrl} controls
+									class="w-full aspect-video object-cover rounded-lg border border-slate-200 bg-black"></video>
+								<figcaption class="mt-1 text-[10px] uppercase tracking-wide text-slate-400">Video</figcaption>
+							</figure>`}
+						</div>`}
+				</div>`;
+			}
+
+			function TimeoutBanner({ createdAt, chunks }) {
+				if (!createdAt || allDone(chunks)) return null;
+				const mins = (Date.now() - createdAt) / 60000;
+				if (mins >= TIMEOUT_MIN) {
+					return html`<div class="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+						⏱ This is taking longer than ${TIMEOUT_MIN} minutes. Some videos may have timed out — you can retry any failed chunks below.
+					</div>`;
+				}
+				if (mins >= WARN_MIN) {
+					return html`<div class="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-700">
+						Still processing… video generation can take several minutes per chunk.
+					</div>`;
+				}
+				return null;
+			}
+
+			// --- app -------------------------------------------------------------
+			function App() {
+				const [input, setInput] = useState(EXAMPLE);
+				const [sessionId, setSessionId] = useState(null);
+				const [chunks, setChunks] = useState([]);
+				const [expiresAt, setExpiresAt] = useState(null);
+				const [createdAt, setCreatedAt] = useState(null);
+				const [errors, setErrors] = useState([]);
+				const [submitting, setSubmitting] = useState(false);
+				const [resumed, setResumed] = useState(false);
+				const pollRef = useRef(null);
+
+				const fetchStatus = useCallback(async (sid) => {
+					try {
+						const r = await fetch('/api/status?sessionId=' + encodeURIComponent(sid));
+						if (!r.ok) return;
+						const data = await r.json();
+						setChunks(data.chunks || []);
+						setExpiresAt(data.expiresAt);
+						saveSession(sid, data.expiresAt, data.chunks);
+						if (allDone(data.chunks || [])) stopPolling();
+					} catch (e) { /* transient */ }
+				}, []);
+
+				const startPolling = useCallback((sid) => {
+					stopPolling();
+					fetchStatus(sid);
+					pollRef.current = setInterval(() => fetchStatus(sid), POLL_MS);
+				}, [fetchStatus]);
+
+				function stopPolling() {
+					if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+				}
+
+				// Resume prior session on load
+				useEffect(() => {
+					const s = loadSession();
+					if (s && s.sessionId) {
+						setSessionId(s.sessionId);
+						setChunks(s.chunks || []);
+						setExpiresAt(s.expiresAt);
+						setCreatedAt(s.createdAt);
+						setResumed(true);
+						startPolling(s.sessionId);
+					}
+					return stopPolling;
+				}, []);
+
+				async function submit() {
+					setErrors([]); setSubmitting(true); setResumed(false);
+					try {
+						const r = await fetch('/api/chunks', {
+							method: 'POST',
+							headers: { 'Content-Type': 'application/json' },
+							body: JSON.stringify({ chunks: input }),
+						});
+						const data = await r.json();
+						if (!r.ok) {
+							setErrors(data.details || [data.error || 'Request failed']);
+							return;
+						}
+						setSessionId(data.sessionId);
+						setExpiresAt(data.expiresAt);
+						setCreatedAt(Date.now());
+						setChunks(data.chunks || []);
+						saveSession(data.sessionId, data.expiresAt, data.chunks);
+						startPolling(data.sessionId);
+					} catch (e) {
+						setErrors(['Network error: ' + e.message]);
+					} finally { setSubmitting(false); }
+				}
+
+				async function retry(chunkId) {
+					try {
+						await fetch('/api/retry', {
+							method: 'POST',
+							headers: { 'Content-Type': 'application/json' },
+							body: JSON.stringify({ sessionId, chunkId }),
+						});
+						startPolling(sessionId);
+					} catch (e) {}
+				}
+
+				function reset() {
+					stopPolling(); clearSession();
+					setSessionId(null); setChunks([]); setErrors([]);
+					setExpiresAt(null); setCreatedAt(null); setResumed(false);
+					setInput(EXAMPLE);
+				}
+
+				const doneCount = chunks.filter(c => c.status === 'complete').length;
+				const failedCount = chunks.filter(c => c.status === 'failed').length;
+
+				return html`<div class="mx-auto max-w-3xl px-4 py-8">
+					<header class="mb-6">
+						<h1 class="text-2xl font-bold text-slate-900">VidaaS</h1>
+						<p class="text-sm text-slate-500">Turn scripted chunks into AI images &amp; videos.</p>
+					</header>
+
+					${!sessionId && html`
+						<section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+							<label class="block text-sm font-medium text-slate-700 mb-2">Paste your chunks</label>
+							<textarea value=${input} onInput=${e => setInput(e.target.value)}
+								rows="12" spellcheck="false"
+								class="w-full rounded-lg border border-slate-300 p-3 font-mono text-xs leading-relaxed focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none"
+								placeholder="— ID: ... PROMPT: ... IMAGE: ... VIDEO: ... —"></textarea>
+
+							${errors.length > 0 && html`<div class="mt-3 rounded-lg bg-red-50 border border-red-200 p-3">
+								<ul class="list-disc list-inside text-xs text-red-700 space-y-0.5">
+									${errors.map((e, i) => html`<li key=${i}>${e}</li>`)}
+								</ul>
+							</div>`}
+
+							<div class="mt-4 flex items-center gap-3">
+								<button onClick=${submit} disabled=${submitting}
+									class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50">
+									${submitting ? 'Submitting…' : 'Generate'}
+								</button>
+								<span class="text-xs text-slate-400">Chunks are separated by "—"</span>
+							</div>
+						</section>`}
+
+					${sessionId && html`
+						<section class="space-y-4">
+							<div class="flex items-center justify-between">
+								<div>
+									<p class="text-sm text-slate-600">
+										${resumed && html`<span class="mr-2 rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-500">resumed</span>`}
+										${doneCount}/${chunks.length} complete${failedCount ? ' · ' + failedCount + ' failed' : ''}
+									</p>
+									<p class="text-[11px] text-slate-400 font-mono">session ${sessionId.slice(0,8)}…</p>
+								</div>
+								<button onClick=${reset} class="text-sm text-slate-500 hover:text-slate-800 underline">New batch</button>
+							</div>
+
+							<${TimeoutBanner} createdAt=${createdAt} chunks=${chunks} />
+
+							<div class="space-y-3">
+								${chunks.map(c => html`<${ChunkCard} key=${c.id} chunk=${c} onRetry=${retry} />`)}
+							</div>
+
+							${expiresAt && html`<p class="text-[11px] text-slate-400">
+								Links expire ${new Date(expiresAt).toLocaleString()}. Download anything you want to keep.
+							</p>`}
+						</section>`}
+
+					<footer class="mt-10 text-center text-[11px] text-slate-400">VidaaS MVP</footer>
+				</div>`;
+			}
+
+			ReactDOM.createRoot(document.getElementById('root')).render(html`<${App} />`);
 		</script>
 	</body>
 </html>

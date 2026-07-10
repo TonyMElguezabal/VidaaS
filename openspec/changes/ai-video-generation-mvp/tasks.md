@@ -67,27 +67,27 @@
 - [x] 8.5 Update D1: chunk status → complete, store video URL
 - [x] 8.6 Store magnific.com URL directly (R2 download deferred per Option B decision)
 
-## 9. Frontend: Next.js Pages + React Components
+## 9. Frontend: Static SPA in public/index.html (React via htm CDN, no build)
 
-- [ ] 9.1 Set up `frontend/` folder with Next.js (or similar static site generator)
-- [ ] 9.2 Create `pages/index.tsx`: main page layout
-- [ ] 9.3 Create `components/ChunkForm.tsx`: textarea input, submit button, validation feedback
-- [ ] 9.4 Create `components/StatusDashboard.tsx`: displays chunks with statuses
-- [ ] 9.5 Create `components/ChunkProgress.tsx`: shows per-chunk progress bar + status
-- [ ] 9.6 Create `components/MediaPreview.tsx`: displays image/video previews when available
-- [ ] 9.7 Implement polling hook: `useStatus(sessionId)` polls `/api/status` every 2 seconds
+- [x] 9.1 Single-file static SPA served from Worker `public/` (chosen over Next.js for simplicity)
+- [x] 9.2 Main page layout (header, form → dashboard flow)
+- [x] 9.3 Chunk input: single raw-text textarea + Generate button + validation feedback
+- [x] 9.4 Status dashboard: renders all chunks with live status
+- [x] 9.5 Per-chunk progress bar + status badge (ChunkCard/ProgressBar/Badge)
+- [x] 9.6 Media preview: image + video embeds when URLs available
+- [x] 9.7 Polling: fetchStatus polls `/api/status` every 2s, stops when all done
 
 ## 10. Frontend: LocalStorage Persistence
 
-- [ ] 10.1 Implement `useLocalStorage(sessionId)`: save sessionId + URLs to localStorage
-- [ ] 10.2 Add 2-day expiration check on page load
-- [ ] 10.3 Show "Resume session?" if session in localStorage and not expired
-- [ ] 10.4 Clear expired sessions on load
+- [x] 10.1 saveSession/loadSession: store sessionId + URLs/refs only (no binary content)
+- [x] 10.2 2-day expiration check on load (uses expiresAt)
+- [x] 10.3 Auto-resume prior session on load with "resumed" badge
+- [x] 10.4 Clear expired sessions on load
 
 ## 11. Frontend: Error Display & Retry
 
-- [ ] 11.1 Add error UI: show error messages from API for failed chunks
-- [ ] 11.2 Add manual retry button for failed chunks
+- [x] 11.1 Error UI: API validation errors listed; per-chunk error shown on failure
+- [x] 11.2 Manual retry button on failed chunks → POST /api/retry, restart polling
 - [x] 11.3 Backend retry endpoint `POST /api/retry` (re-enqueues chunk by sessionId+chunkId; verified)
 
 ## 12. Webhook Testing: ngrok Setup (Local Development)
@@ -108,18 +108,18 @@
 
 ## 14. UI Polish & UX
 
-- [ ] 14.1 Add progress bars: visual indicator of image/video generation progress
-- [ ] 14.2 Add loading spinners: show during API calls
-- [ ] 14.3 Add better styling: use Tailwind for professional look
-- [ ] 14.4 Add countdown timer: show remaining time before 20-min timeout
+- [x] 14.1 Add progress bars: staged progress bar per chunk (5/30/55/80/100%)
+- [x] 14.2 Add loading states: submit button disabled state + animated in-progress bars/badges
+- [x] 14.3 Add better styling: Tailwind, card layout, badges, responsive
+- [x] 14.4 Timeout banners: amber at 15 min, red at 20 min (TimeoutBanner)
 - [ ] 14.5 Add estimated duration: "Image: ~2-5 min, Video: ~1-3 min"
 
 ## 15. Error Handling & Resilience
 
 - [x] 15.1 Add input validation: reject malformed chunks with clear error messages (verified: missing field, duplicate ID)
-- [ ] 15.2 Add timeout warning: at 15 min, show "Still processing..." message
-- [ ] 15.3 Add 20-min timeout: show "Timeout - videos may not complete. Retry?" button
-- [ ] 15.4 Add retry button: allow user to resubmit failed chunks
+- [x] 15.2 Add timeout warning: at 15 min, amber "Still processing…" banner
+- [x] 15.3 Add 20-min timeout: red "may have timed out — retry" banner
+- [x] 15.4 Add retry button: per-chunk retry on failed chunks
 - [x] 15.5 Add logging: console log all API calls, webhook receipts, errors for debugging (backend)
 
 ## 16. End-to-End Testing
