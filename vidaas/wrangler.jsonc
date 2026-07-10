@@ -57,41 +57,23 @@
 		]
 	},
 
-	/* R2 Binding */
-	"r2_buckets": [
-		{
-			"binding": "R2_BUCKET",
-			"bucket_name": "vidaas-videos",
-			"jurisdiction": "eu"
-		}
-	],
+	/* R2 binding omitted: not used in the MVP (videos are stored as
+	 * magnific.com URLs per the Option B decision). Re-add once R2 is
+	 * enabled on the account and download-to-R2 is wired up.
+	 */
 
-	/* Environment Variables */
+	/* Environment Variables.
+	 * For a real (credit-spending) deployment set:
+	 *   "ENVIRONMENT": "production"
+	 *   "WEBHOOK_BASE_URL": "https://vidaas.<subdomain>.workers.dev"
+	 */
 	"vars": {
-		"WEBHOOK_BASE_URL": "http://localhost:8787",
-		"ENVIRONMENT": "development"
-	},
+		"WEBHOOK_BASE_URL": "https://vidaas.jose-elguezabal.workers.dev",
+		"ENVIRONMENT": "production"
+	}
 
 	/* Secrets (set via `wrangler secret put <NAME>` for production):
 	 * - FAL_API_KEY
 	 * - MAGNIFIC_API_KEY
-	 * - R2_ACCESS_KEY_ID
-	 * - R2_SECRET_ACCESS_KEY
 	 */
-
-	"env": {
-		"production": {
-			"name": "vidaas-prod",
-			"vars": {
-				"ENVIRONMENT": "production"
-			},
-			"d1_databases": [
-				{
-					"binding": "DB",
-					"database_name": "vidaas",
-					"database_id": "eb176d5e-342c-4eee-ad33-900a5cb244c2"
-				}
-			]
-		}
-	}
 }
