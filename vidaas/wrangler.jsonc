@@ -19,20 +19,16 @@
 		"enabled": true
 	},
 	"upload_source_maps": true,
-	/* Database Bindings */
+
+	/* Database Binding */
 	"d1_databases": [
 		{
 			"binding": "DB",
 			"database_name": "vidaas",
-			"database_id": "will-be-created"
-		},
-		{
-			"binding": "vidaas",
-			"database_name": "vidaas",
-			"database_id": "eb176d5e-342c-4eee-ad33-900a5cb244c2",
-			"remote": true
+			"database_id": "eb176d5e-342c-4eee-ad33-900a5cb244c2"
 		}
 	],
+
 	/* Queue Bindings */
 	"queues": {
 		"producers": [
@@ -44,18 +40,23 @@
 				"binding": "VIDEO_QUEUE",
 				"queue": "video-generation"
 			}
-		]
-	},
-	/* Durable Objects */
-	"durable_objects": {
-		"bindings": [
+		],
+		"consumers": [
 			{
-				"name": "SESSION_COORDINATOR",
-				"class_name": "SessionCoordinator",
-				"script_name": "vidaas"
+				"queue": "image-generation",
+				"max_batch_size": 1,
+				"max_batch_timeout": 1,
+				"max_retries": 3
+			},
+			{
+				"queue": "video-generation",
+				"max_batch_size": 1,
+				"max_batch_timeout": 1,
+				"max_retries": 3
 			}
 		]
 	},
+
 	/* R2 Binding */
 	"r2_buckets": [
 		{
@@ -64,32 +65,31 @@
 			"jurisdiction": "eu"
 		}
 	],
+
 	/* Environment Variables */
 	"vars": {
 		"WEBHOOK_BASE_URL": "http://localhost:8787",
 		"ENVIRONMENT": "development"
 	},
-	/* Secrets (use wrangler secret put) */
-	// Secrets should be configured via: wrangler secret put FAL_API_KEY
-	// - FAL_API_KEY
-	// - MAGNIFIC_API_KEY
-	// - R2_ACCESS_KEY_ID
-	// - R2_SECRET_ACCESS_KEY
-	/* Environments for production */
+
+	/* Secrets (set via `wrangler secret put <NAME>` for production):
+	 * - FAL_API_KEY
+	 * - MAGNIFIC_API_KEY
+	 * - R2_ACCESS_KEY_ID
+	 * - R2_SECRET_ACCESS_KEY
+	 */
+
 	"env": {
 		"production": {
 			"name": "vidaas-prod",
-			"routes": [
-				{
-					"pattern": "vidaas.example.com",
-					"zone_name": "example.com"
-				}
-			],
+			"vars": {
+				"ENVIRONMENT": "production"
+			},
 			"d1_databases": [
 				{
 					"binding": "DB",
-					"database_name": "vidaas-prod",
-					"database_id": "will-be-updated"
+					"database_name": "vidaas",
+					"database_id": "eb176d5e-342c-4eee-ad33-900a5cb244c2"
 				}
 			]
 		}

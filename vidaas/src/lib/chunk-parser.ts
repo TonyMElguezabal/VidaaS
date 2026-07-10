@@ -38,7 +38,7 @@ export function parseChunks(input: string): { chunks: ParsedChunk[]; errors: str
       chunks.push(chunk);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        errors.push(`Chunk ${index + 1}: ${error.errors[0]?.message || 'Invalid format'}`);
+        errors.push(`Chunk ${index + 1}: ${error.issues[0]?.message || 'Invalid format'}`);
       } else {
         errors.push(`Chunk ${index + 1}: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }

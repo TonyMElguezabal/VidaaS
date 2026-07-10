@@ -18,10 +18,10 @@
 
 ## 3. Database Setup: Cloudflare D1
 
-- [x] 3.1 Create D1 database schema: `src/migrations/0001_init.sql` with sessions, chunks, tasks, queue_jobs tables
-- [ ] 3.2 Run initial migration via `wrangler d1` command
-- [ ] 3.3 Test D1 queries locally with `wrangler dev`
-- [ ] 3.4 Verify schema and indexes created correctly
+- [x] 3.1 Create D1 database schema: `src/migrations/0001_init.sql` with sessions, chunks, tasks, queue_jobs tables (+ `0002_add_error_column.sql`)
+- [x] 3.2 Create D1 database (id eb176d5e-...) and run migrations via `wrangler d1 execute`
+- [x] 3.3 Test D1 queries locally with `wrangler dev` (POST/GET verified)
+- [x] 3.4 Verify schema and indexes created correctly
 
 ## 4. Mock Data & Testing Framework
 
@@ -49,23 +49,23 @@
 
 ## 7. Background Queue: Image Generation
 
-- [x] 7.1 Create `src/workers/image-queue.ts`: Cloudflare Queue consumer for image jobs
-- [x] 7.2 Implement image generation call to fal.ai (mock first, real API available)
-- [ ] 7.3 Implement 30-second stagger: wait 30s between chunks if multiple queued
+- [x] 7.1 Queue consumers implemented in `src/index.ts` (image + video), staggered enqueue
+- [x] 7.2 Implement image generation call to fal.ai via `src/lib/generation.ts` (mock + real)
+- [x] 7.3 Implement 30-second stagger: `delaySeconds: i * 30` on enqueue (verified: b,c stay submitted)
 - [x] 7.4 Update D1 chunk status: submitted → image-generating → image-complete
 - [x] 7.5 Store image URL in D1
-- [ ] 7.6 Trigger video generation: POST to magnific.com with webhook URL
-- [x] 7.7 Implement retry mechanism: on failure, re-enqueue with same chunk ID (max 3 retries)
-- [x] 7.8 On final failure, mark chunk as failed with error message
+- [x] 7.6 Trigger video generation: image consumer hands off to VIDEO_QUEUE → magnific.com with webhook URL
+- [x] 7.7 Implement retry mechanism: `message.retry()` up to MAX_RETRIES=3 (same chunkId preserved)
+- [x] 7.8 On final failure, mark chunk as failed with error message (error column)
 
 ## 8. Webhook Handler: Video Completion
 
-- [ ] 8.1 Create `src/handlers/webhooks/magnific.ts`: `POST /api/webhooks/magnific` handler
-- [ ] 8.2 Extract chunkId from query parameters
-- [ ] 8.3 Parse magnific.com webhook payload: extract video URL, task_id, status
-- [ ] 8.4 Verify idempotency: check if chunk already has videoUrl (avoid duplicates)
-- [ ] 8.5 Update D1: chunk status → video-complete, store video URL
-- [ ] 8.6 For now: store magnific.com URL directly (don't download to R2)
+- [x] 8.1 `POST /api/webhooks/magnific` handler in `src/index.ts`
+- [x] 8.2 Extract chunkId AND sessionId from query parameters (unambiguous correlation)
+- [x] 8.3 Parse magnific.com webhook payload: extract video URL from data.generated[0].url
+- [x] 8.4 Verify idempotency: if chunk already complete with videoUrl, return early (verified)
+- [x] 8.5 Update D1: chunk status → complete, store video URL
+- [x] 8.6 Store magnific.com URL directly (R2 download deferred per Option B decision)
 
 ## 9. Frontend: Next.js Pages + React Components
 
@@ -88,7 +88,7 @@
 
 - [ ] 11.1 Add error UI: show error messages from API for failed chunks
 - [ ] 11.2 Add manual retry button for failed chunks
-- [ ] 11.3 Implement retry: re-submit failed chunk via new POST to `/api/chunks` (or dedicated retry endpoint)
+- [x] 11.3 Backend retry endpoint `POST /api/retry` (re-enqueues chunk by sessionId+chunkId; verified)
 
 ## 12. Webhook Testing: ngrok Setup (Local Development)
 
@@ -116,19 +116,19 @@
 
 ## 15. Error Handling & Resilience
 
-- [ ] 15.1 Add input validation: reject malformed chunks with clear error messages
+- [x] 15.1 Add input validation: reject malformed chunks with clear error messages (verified: missing field, duplicate ID)
 - [ ] 15.2 Add timeout warning: at 15 min, show "Still processing..." message
 - [ ] 15.3 Add 20-min timeout: show "Timeout - videos may not complete. Retry?" button
 - [ ] 15.4 Add retry button: allow user to resubmit failed chunks
-- [ ] 15.5 Add logging: console log all API calls, webhook receipts, errors for debugging
+- [x] 15.5 Add logging: console log all API calls, webhook receipts, errors for debugging (backend)
 
 ## 16. End-to-End Testing
 
-- [ ] 16.1 Test single chunk: submit → image generates → video generates → both URLs stored
-- [ ] 16.2 Test multi-chunk (5 chunks): verify parallel image generation with 30s stagger
+- [x] 16.1 Test single chunk: submit → image → video → both URLs stored (verified, mock mode)
+- [x] 16.2 Test multi-chunk: verify parallel image generation with 30s stagger (verified: a complete, b/c queued)
 - [ ] 16.3 Test error recovery: mock API failure, verify retry mechanism works
 - [ ] 16.4 Test timeout: trigger manual timeout at 20 min, verify user can retry
-- [ ] 16.5 Test webhook idempotency: call webhook twice, verify no duplicates in DB
+- [x] 16.5 Test webhook idempotency: call webhook twice, verify no duplicates (verified)
 - [ ] 16.6 Test session recovery: close browser mid-generation, resume from localStorage
 
 ## 17. Deployment Preparation
