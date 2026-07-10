@@ -21,7 +21,7 @@ export async function generateImage(prompt: string, env: GenerationEnv): Promise
     return getMockFalAiResponse().data.images[0].url;
   }
 
-  const response = await fetch('https://fal.run/fal-ai/bytedance/seedream/v5/pro/text-to-image', {
+  const response = await fetch('https://fal.run/bytedance/seedream/v5/pro/text-to-image', {
     method: 'POST',
     headers: {
       Authorization: `Key ${env.FAL_API_KEY}`,
