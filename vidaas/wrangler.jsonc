@@ -19,16 +19,20 @@
 		"enabled": true
 	},
 	"upload_source_maps": true,
-
 	/* Database Bindings */
 	"d1_databases": [
 		{
 			"binding": "DB",
 			"database_name": "vidaas",
 			"database_id": "will-be-created"
+		},
+		{
+			"binding": "vidaas",
+			"database_name": "vidaas",
+			"database_id": "eb176d5e-342c-4eee-ad33-900a5cb244c2",
+			"remote": true
 		}
 	],
-
 	/* Queue Bindings */
 	"queues": {
 		"producers": [
@@ -40,19 +44,8 @@
 				"binding": "VIDEO_QUEUE",
 				"queue": "video-generation"
 			}
-		],
-		"consumers": [
-			{
-				"queue": "image-generation",
-				"max_batch_size": 1,
-				"max_batch_timeout": 30,
-				"max_retries": 3,
-				"dead_letter_queue": "image-generation-dlq",
-				"handler": "src/workers/image-queue.ts"
-			}
 		]
 	},
-
 	/* Durable Objects */
 	"durable_objects": {
 		"bindings": [
@@ -63,7 +56,6 @@
 			}
 		]
 	},
-
 	/* R2 Binding */
 	"r2_buckets": [
 		{
@@ -72,20 +64,17 @@
 			"jurisdiction": "eu"
 		}
 	],
-
 	/* Environment Variables */
 	"vars": {
 		"WEBHOOK_BASE_URL": "http://localhost:8787",
 		"ENVIRONMENT": "development"
 	},
-
 	/* Secrets (use wrangler secret put) */
 	// Secrets should be configured via: wrangler secret put FAL_API_KEY
 	// - FAL_API_KEY
 	// - MAGNIFIC_API_KEY
 	// - R2_ACCESS_KEY_ID
 	// - R2_SECRET_ACCESS_KEY
-
 	/* Environments for production */
 	"env": {
 		"production": {
