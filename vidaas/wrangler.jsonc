@@ -1,0 +1,108 @@
+/**
+ * For more details on how to configure Wrangler, refer to:
+ * https://developers.cloudflare.com/workers/wrangler/configuration/
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "vidaas",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-07-10",
+	"compatibility_flags": [
+		"nodejs_compat",
+		"global_fetch_strictly_public"
+	],
+	"assets": {
+		// The path to the directory containing the `index.html` file to be served at `/`
+		"directory": "./public"
+	},
+	"observability": {
+		"enabled": true
+	},
+	"upload_source_maps": true,
+
+	/* Database Bindings */
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "vidaas",
+			"database_id": "will-be-created"
+		}
+	],
+
+	/* Queue Bindings */
+	"queues": {
+		"producers": [
+			{
+				"binding": "IMAGE_QUEUE",
+				"queue": "image-generation"
+			},
+			{
+				"binding": "VIDEO_QUEUE",
+				"queue": "video-generation"
+			}
+		],
+		"consumers": [
+			{
+				"queue": "image-generation",
+				"max_batch_size": 1,
+				"max_batch_timeout": 30,
+				"max_retries": 3,
+				"dead_letter_queue": "image-generation-dlq",
+				"handler": "src/workers/image-queue.ts"
+			}
+		]
+	},
+
+	/* Durable Objects */
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "SESSION_COORDINATOR",
+				"class_name": "SessionCoordinator",
+				"script_name": "vidaas"
+			}
+		]
+	},
+
+	/* R2 Binding */
+	"r2_buckets": [
+		{
+			"binding": "R2_BUCKET",
+			"bucket_name": "vidaas-videos",
+			"jurisdiction": "eu"
+		}
+	],
+
+	/* Environment Variables */
+	"vars": {
+		"WEBHOOK_BASE_URL": "http://localhost:8787",
+		"ENVIRONMENT": "development"
+	},
+
+	/* Secrets (use wrangler secret put) */
+	// Secrets should be configured via: wrangler secret put FAL_API_KEY
+	// - FAL_API_KEY
+	// - MAGNIFIC_API_KEY
+	// - R2_ACCESS_KEY_ID
+	// - R2_SECRET_ACCESS_KEY
+
+	/* Environments for production */
+	"env": {
+		"production": {
+			"name": "vidaas-prod",
+			"routes": [
+				{
+					"pattern": "vidaas.example.com",
+					"zone_name": "example.com"
+				}
+			],
+			"d1_databases": [
+				{
+					"binding": "DB",
+					"database_name": "vidaas-prod",
+					"database_id": "will-be-updated"
+				}
+			]
+		}
+	}
+}

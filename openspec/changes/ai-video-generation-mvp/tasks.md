@@ -1,62 +1,150 @@
-## 1. POC: Verify API Integration (Blocker)
+## 1. POC: Verify API Integration (Complete ✓)
 
-- [ ] 1.1 Test fal.ai image generation API: POST request with text prompt, capture response structure and check if query parameters are preserved in webhook URL
-- [ ] 1.2 Test fal.ai webhook: Manually trigger image generation and verify webhook payload structure (image URL location, parameter echoing)
-- [ ] 1.3 Test magnific.com video generation API: POST request with image URL and prompt, capture response structure
-- [ ] 1.4 Test magnific.com webhook: Manually trigger video generation and verify webhook payload structure (video URL, status field names)
-- [ ] 1.5 Verify webhook correlation: Confirm both services echo back query parameters or metadata passed in webhook URL
-- [ ] 1.6 Document exact API payload formats and webhook response structures for implementation
+- [x] 1.1 Test fal.ai image generation API: Confirmed working, returns images immediately via @fal-ai/client
+- [x] 1.2 Test fal.ai webhook: Confirmed sync mode (no async webhooks needed for images)
+- [x] 1.3 Test magnific.com video generation API: Confirmed working, accepts requests and returns task_id
+- [x] 1.4 Test magnific.com webhook: Confirmed accepts webhook_url parameter
+- [x] 1.5 Verify webhook correlation: Confirmed query parameters can be passed in webhook URLs
+- [x] 1.6 Document exact API payload formats and webhook response structures for implementation
 
-## 2. Project Setup
+## 2. Project Setup: Cloudflare Workers + Wrangler
 
-- [ ] 2.1 Initialize Next.js App Router project with TypeScript and Tailwind CSS
-- [ ] 2.2 Create directory structure: `app/api`, `lib`, `components`, `db`, `public`
-- [ ] 2.3 Install dependencies: `better-sqlite3` (SQLite), `@aws-sdk/client-s3` (Cloudflare R2), `uuid`
-- [ ] 2.4 Create SQLite schema initialization script and integrate into app startup
+- [x] 2.1 Initialize project with `wrangler init --type javascript` and set up TypeScript
+- [x] 2.2 Create folder structure: `src/workers/`, `src/handlers/`, `src/lib/`, `src/types/`, `src/migrations/`, `frontend/`
+- [x] 2.3 Install dependencies: `wrangler`, `d1`, `hono`, `@aws-sdk/client-s3`, `uuid`
+- [x] 2.4 Create `wrangler.toml` with D1 database, Queues, Durable Objects bindings, R2 binding
+- [x] 2.5 Create `.env.local` and `.env.example` for API keys (fal.ai, magnific.com, R2 credentials)
+- [x] 2.6 Set up `.gitignore` for wrangler secrets, dist files, .wrangler/
 
-## 3. API Routes: Core Infrastructure
+## 3. Database Setup: Cloudflare D1
 
-- [ ] 3.1 Implement `POST /api/chunks`: Parse chunk input text, validate structure, create session, store in SQLite, return sessionId + parsed chunks
-- [ ] 3.2 Implement `GET /api/status?sessionId=<id>`: Query SQLite for chunks and tasks, return current state with image/video URLs and error details
-- [ ] 3.3 Implement `POST /api/webhooks/fal`: Receive image generation webhook, extract chunk ID from query params, update SQLite, trigger video generation
-- [ ] 3.4 Implement `POST /api/webhooks/magnific`: Receive video generation webhook, extract chunk ID from query params, update SQLite, mark chunk complete
+- [x] 3.1 Create D1 database schema: `src/migrations/0001_init.sql` with sessions, chunks, tasks, queue_jobs tables
+- [ ] 3.2 Run initial migration via `wrangler d1` command
+- [ ] 3.3 Test D1 queries locally with `wrangler dev`
+- [ ] 3.4 Verify schema and indexes created correctly
 
-## 4. Async Orchestration: Generation Triggers
+## 4. Mock Data & Testing Framework
 
-- [ ] 4.1 Create utility function to construct webhook URLs with chunk ID query parameters
-- [ ] 4.2 Create fal.ai integration: POST to fal.ai API with IMAGE prompt, include webhook URL with chunkId parameter
-- [ ] 4.3 Create magnific.com integration: POST to magnific.com API with image URL + VIDEO prompt + webhook URL with chunkId parameter
-- [ ] 4.4 Implement state machine: chunk submission → image-generating → (webhook) → video-generating → (webhook) → complete
-- [ ] 4.5 Add error handling: catch API errors, store error message in SQLite, mark task as failed
+- [x] 4.1 Create mock responses for fal.ai (image generation) based on POC response format
+- [x] 4.2 Create mock responses for magnific.com (video generation) based on POC response format
+- [x] 4.3 Create test utilities in `src/lib/mocks.ts`
+- [x] 4.4 Environment flag to switch between mock and real APIs (ENVIRONMENT variable)
 
-## 5. Content Storage
+## 5. API Handler: Chunk Submission
 
-- [ ] 5.1 Configure Cloudflare R2 S3 client with provided credentials and endpoint
-- [ ] 5.2 Implement image storage: In fal.ai webhook handler, store image URL from fal.ai CDN directly in SQLite (no re-upload for MVP)
-- [ ] 5.3 Implement video storage: In magnific.com webhook handler, download video file and upload to Cloudflare R2 with key pattern `videos/{sessionId}/{chunkId}.mp4`
-- [ ] 5.4 Add error handling: If R2 upload fails, log error and store magnific.com URL as fallback with note about temporary storage
+- [x] 5.1 Create `src/index.ts`: Main Hono app with `POST /api/chunks` handler
+- [x] 5.2 Implement chunk parsing via `src/lib/chunk-parser.ts`: split by "—" delimiter, extract ID, PROMPT, IMAGE, VIDEO
+- [x] 5.3 Implement validation using Zod: check all fields present, no duplicate IDs, non-empty prompts
+- [x] 5.4 Create session: generate UUID, store in D1
+- [x] 5.5 Store chunks in D1
+- [x] 5.6 Enqueue image generation jobs to Cloudflare Queue for each chunk
+- [x] 5.7 Return sessionId + chunk list to client
 
-## 6. Frontend: User Interface
+## 6. API Handler: Status Query
 
-- [ ] 6.1 Create input form component: textarea for chunk input, submit button, basic validation feedback
-- [ ] 6.2 Create status dashboard component: displays all chunks with real-time status (submitted/image-generating/image-complete/video-generating/complete/failed)
-- [ ] 6.3 Implement polling: React component polls `/api/status?sessionId=<id>` every 2 seconds and updates UI state
-- [ ] 6.4 Add asset preview: Display image and video thumbnails/embeds when URLs are available
-- [ ] 6.5 Add error display: Show error messages from failed chunks to user
-- [ ] 6.6 Create layout: Simple page with form at top, status dashboard below (form → results flow)
+- [x] 6.1 Implement `GET /api/status?sessionId=<id>` handler in `src/index.ts`
+- [x] 6.2 Query D1 for session, chunks, tasks
+- [x] 6.3 Build response with status, imageUrl, videoUrl, errors for each chunk
+- [x] 6.4 Include session expiration (2 days from creation)
 
-## 7. Testing & Verification
+## 7. Background Queue: Image Generation
 
-- [ ] 7.1 End-to-end test: Submit single chunk, verify image generates, verify video generates, verify both stored correctly
-- [ ] 7.2 Multi-chunk test: Submit 3-5 chunks, verify parallel image generation and sequential video generation
-- [ ] 7.3 Error handling test: Trigger failures in API mocks, verify error messages appear in UI
-- [ ] 7.4 State persistence test: Restart server during in-flight generation, verify session state recovers from SQLite
-- [ ] 7.5 Webhook correlation test: Verify chunks are matched to correct images/videos (spot check 5+ chunks)
+- [x] 7.1 Create `src/workers/image-queue.ts`: Cloudflare Queue consumer for image jobs
+- [x] 7.2 Implement image generation call to fal.ai (mock first, real API available)
+- [ ] 7.3 Implement 30-second stagger: wait 30s between chunks if multiple queued
+- [x] 7.4 Update D1 chunk status: submitted → image-generating → image-complete
+- [x] 7.5 Store image URL in D1
+- [ ] 7.6 Trigger video generation: POST to magnific.com with webhook URL
+- [x] 7.7 Implement retry mechanism: on failure, re-enqueue with same chunk ID (max 3 retries)
+- [x] 7.8 On final failure, mark chunk as failed with error message
 
-## 8. Polish & Deployment
+## 8. Webhook Handler: Video Completion
 
-- [ ] 8.1 Add input validation: Reject chunks with missing fields, duplicate IDs, empty prompts
-- [ ] 8.2 Add UI refinements: Loading states, progress spinners, better formatting
-- [ ] 8.3 Add logging: Log all API calls and webhook receipts for debugging
-- [ ] 8.4 Create README with setup instructions, API key configuration, example chunk format
-- [ ] 8.5 Prepare deployment: Build steps, environment variables documented, ready for testing environment
+- [ ] 8.1 Create `src/handlers/webhooks/magnific.ts`: `POST /api/webhooks/magnific` handler
+- [ ] 8.2 Extract chunkId from query parameters
+- [ ] 8.3 Parse magnific.com webhook payload: extract video URL, task_id, status
+- [ ] 8.4 Verify idempotency: check if chunk already has videoUrl (avoid duplicates)
+- [ ] 8.5 Update D1: chunk status → video-complete, store video URL
+- [ ] 8.6 For now: store magnific.com URL directly (don't download to R2)
+
+## 9. Frontend: Next.js Pages + React Components
+
+- [ ] 9.1 Set up `frontend/` folder with Next.js (or similar static site generator)
+- [ ] 9.2 Create `pages/index.tsx`: main page layout
+- [ ] 9.3 Create `components/ChunkForm.tsx`: textarea input, submit button, validation feedback
+- [ ] 9.4 Create `components/StatusDashboard.tsx`: displays chunks with statuses
+- [ ] 9.5 Create `components/ChunkProgress.tsx`: shows per-chunk progress bar + status
+- [ ] 9.6 Create `components/MediaPreview.tsx`: displays image/video previews when available
+- [ ] 9.7 Implement polling hook: `useStatus(sessionId)` polls `/api/status` every 2 seconds
+
+## 10. Frontend: LocalStorage Persistence
+
+- [ ] 10.1 Implement `useLocalStorage(sessionId)`: save sessionId + URLs to localStorage
+- [ ] 10.2 Add 2-day expiration check on page load
+- [ ] 10.3 Show "Resume session?" if session in localStorage and not expired
+- [ ] 10.4 Clear expired sessions on load
+
+## 11. Frontend: Error Display & Retry
+
+- [ ] 11.1 Add error UI: show error messages from API for failed chunks
+- [ ] 11.2 Add manual retry button for failed chunks
+- [ ] 11.3 Implement retry: re-submit failed chunk via new POST to `/api/chunks` (or dedicated retry endpoint)
+
+## 12. Webhook Testing: ngrok Setup (Local Development)
+
+- [ ] 12.1 Document how to install and run ngrok locally
+- [ ] 12.2 Create script: `npm run ngrok` exposes localhost:8787 (Cloudflare dev port)
+- [ ] 12.3 Use ngrok URL as `WEBHOOK_URL` environment variable during local testing
+- [ ] 12.4 Test flow: submit chunk → image generates → ngrok receives webhook callback
+
+## 13. Integration: Real APIs (Staged)
+
+- [ ] 13.1 Switch mock flag: enable real fal.ai API calls
+- [ ] 13.2 Test: submit chunk, verify image generates via real API
+- [ ] 13.3 Fix any response format mismatches vs mocks
+- [ ] 13.4 Switch mock flag: enable real magnific.com API calls
+- [ ] 13.5 Test: with real image, trigger video generation
+- [ ] 13.6 Verify webhook received and video URL stored
+
+## 14. UI Polish & UX
+
+- [ ] 14.1 Add progress bars: visual indicator of image/video generation progress
+- [ ] 14.2 Add loading spinners: show during API calls
+- [ ] 14.3 Add better styling: use Tailwind for professional look
+- [ ] 14.4 Add countdown timer: show remaining time before 20-min timeout
+- [ ] 14.5 Add estimated duration: "Image: ~2-5 min, Video: ~1-3 min"
+
+## 15. Error Handling & Resilience
+
+- [ ] 15.1 Add input validation: reject malformed chunks with clear error messages
+- [ ] 15.2 Add timeout warning: at 15 min, show "Still processing..." message
+- [ ] 15.3 Add 20-min timeout: show "Timeout - videos may not complete. Retry?" button
+- [ ] 15.4 Add retry button: allow user to resubmit failed chunks
+- [ ] 15.5 Add logging: console log all API calls, webhook receipts, errors for debugging
+
+## 16. End-to-End Testing
+
+- [ ] 16.1 Test single chunk: submit → image generates → video generates → both URLs stored
+- [ ] 16.2 Test multi-chunk (5 chunks): verify parallel image generation with 30s stagger
+- [ ] 16.3 Test error recovery: mock API failure, verify retry mechanism works
+- [ ] 16.4 Test timeout: trigger manual timeout at 20 min, verify user can retry
+- [ ] 16.5 Test webhook idempotency: call webhook twice, verify no duplicates in DB
+- [ ] 16.6 Test session recovery: close browser mid-generation, resume from localStorage
+
+## 17. Deployment Preparation
+
+- [ ] 17.1 Create `.env.production` template with Cloudflare secrets management
+- [ ] 17.2 Document environment setup: which vars go in Cloudflare dashboard vs local
+- [ ] 17.3 Test deployment: `wrangler publish` to Cloudflare
+- [ ] 17.4 Configure D1 in production: run migrations
+- [ ] 17.5 Configure R2 bucket: create if not exists
+- [ ] 17.6 Test end-to-end on Cloudflare staging
+
+## 18. Documentation
+
+- [ ] 18.1 Create README.md: project overview, architecture, setup instructions
+- [ ] 18.2 Document API endpoints: request/response formats
+- [ ] 18.3 Document environment variables: all required keys and how to obtain them
+- [ ] 18.4 Create example chunk format: show user how to structure input
+- [ ] 18.5 Add troubleshooting guide: common issues and solutions
+- [ ] 18.6 Document webhook testing: how to use ngrok locally

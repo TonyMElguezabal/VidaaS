@@ -1,6 +1,6 @@
 ## Context
 
-This MVP addresses rapid AI-driven video generation from user-provided scripts. Current state: no video generation capability exists. The system must orchestrate async multi-step generation (image → video) using third-party APIs with webhook callbacks for state transitions. Primary constraint: simplicity and speed-to-market over feature completeness.
+This MVP addresses rapid AI-driven video generation from user-provided scripts. Current state: no video generation capability exists. The system must orchestrate async multi-step generation (image → video) using third-party APIs with webhook callbacks for state transitions. **Deployment target: Cloudflare serverless (Workers, D1, Queues, Durable Objects).** Primary constraint: simplicity and speed-to-market over feature completeness, operating within serverless constraints (30s request timeout).
 
 ## Goals / Non-Goals
 
@@ -8,8 +8,10 @@ This MVP addresses rapid AI-driven video generation from user-provided scripts. 
 - Enable end-to-end video generation from structured script chunks in a single session
 - Implement async orchestration pattern using webhooks for non-blocking multi-step workflows
 - Provide real-time progress visibility to users via polling
-- Persist state to SQLite for reliability across server restarts
+- Persist state to Cloudflare D1 for reliability across serverless restarts
+- Implement background job queue (Cloudflare Queues) for long-running image generation (5-15 min)
 - Demonstrate proof-of-concept for webhook correlation ID mechanism with fal.ai and magnific.com
+- Deploy fully on Cloudflare (Workers, D1, Queues, Durable Objects)
 
 **Non-Goals:**
 - Persistent user accounts or authentication (MVP is public/sessionless)
@@ -20,16 +22,26 @@ This MVP addresses rapid AI-driven video generation from user-provided scripts. 
 
 ## Decisions
 
-### Decision 1: Architecture - Serverless-first with SQLite state
+### Decision 1: Architecture - Cloudflare Workers + D1 + Queues + Durable Objects
 
-**Choice:** Next.js App Router with in-process SQLite, no separate backend service.
+**Choice:** Deploy on Cloudflare:
+- **Frontend**: Next.js hosted on Cloudflare Pages
+- **API Routes**: Cloudflare Workers (30s timeout limit)
+- **Database**: Cloudflare D1 (serverless SQLite)
+- **Background Jobs**: Cloudflare Queues (for long-running image generation)
+- **Stateful Operations**: Cloudflare Durable Objects (for webhook coordination)
 
-**Rationale:** Simplest deployment model for MVP. No need for queue system (Redis/RabbitMQ) or separate worker service. Webhooks are handled as HTTP POST → state update → API call to next service in sequence.
+**Rationale:** 
+- Unified platform (no separate deployments)
+- D1 provides persistent state without managing infrastructure
+- Queues handle 5-15 min image generation without blocking Workers (30s timeout)
+- Durable Objects coordinate state across async operations
+- Built-in scaling, pay-per-use, zero-ops deployment
 
 **Alternatives Considered:**
-- Full microservices with job queue (Bull/BullMQ): Overkill for MVP, adds operational complexity
-- Pure in-memory state: Loses state on restart, unacceptable for long-running video generation
-- External database (PostgreSQL): Adds deployment dependency, SQLite sufficient for MVP scale
+- Traditional Node.js server (Heroku/Railway): Simpler but requires infrastructure management
+- Workers alone (no Queues): Can't handle 5-15 min image generation within 30s timeout
+- Full microservices: Overkill for MVP, defeats serverless simplicity
 
 ### Decision 2: Async orchestration - Webhook-driven pipeline
 
@@ -105,7 +117,7 @@ This MVP addresses rapid AI-driven video generation from user-provided scripts. 
 
 ### Decision 8: Error handling - Fail fast, report to user
 
-**Choice:** If any API call fails (fal.ai/magnific.com), mark chunk as failed with error details in SQLite. UI displays error. No automatic retry.
+**Choice:** If any API call fails (fal.ai/magnific.com), mark chunk as failed with error details in D1. UI displays error. No automatic retry.
 
 **Rationale:** MVP scope. Retry logic can be added later. Gives user visibility into failures immediately.
 
@@ -113,25 +125,68 @@ This MVP addresses rapid AI-driven video generation from user-provided scripts. 
 - Exponential backoff retry: Adds queuing complexity, can mask real issues
 - Partial failure recovery: Out of scope (e.g., retry only fal.ai, not magnific.com)
 
+### Decision 9: Background image generation - Cloudflare Queues
+
+**Choice:** Image generation (5-15 min blocking operation) runs in Cloudflare Queues worker, not in API endpoint.
+
+**Flow:**
+1. API Worker receives `/api/chunks` request
+2. Validates chunks, saves to D1, creates session
+3. Enqueues image generation jobs to Cloudflare Queue
+4. Returns sessionId immediately (doesn't wait)
+5. Queue Worker processes images asynchronously
+6. Triggers video generation when image completes
+7. Client polls `/api/status` to track progress
+
+**Rationale:** Workers have 30s timeout; image generation takes 5-15 min. Queues provide reliable async job processing without blocking the API.
+
+**Alternatives Considered:**
+- Submit directly to fal.ai in API endpoint: Times out after 30s, user never gets completion
+- Use Durable Objects for long-running tasks: Overkill, Queues designed exactly for this
+
+### Decision 10: Webhook testing - ngrok for local development
+
+**Choice:** During development, use ngrok to expose localhost for webhook testing:
+```
+ngrok http 8787
+→ Provides public HTTPS URL like https://abc123.ngrok.io
+→ Use https://abc123.ngrok.io/api/webhooks/magnific as webhook callback
+```
+
+**Rationale:** Cloudflare Workers are deployed immediately, but for early testing/debugging, local ngrok tunnel simplifies iteration.
+
+**Alternatives Considered:**
+- Deploy every change to Cloudflare: Slow iteration, can't debug locally
+- Mock webhooks in tests: Doesn't verify real service integration
+
 ## Risks / Trade-offs
 
 | Risk | Mitigation |
 |------|-----------|
-| **Webhook correlation mechanism fails** (fal.ai/magnific.com don't support passing IDs in webhook URL) | POC must verify this before building. If it fails, switch to storing request IDs in database and querying on webhook receipt. |
-| **Webhook never arrives** (network failure, service outage) | User sees "processing" indefinitely. Add UI timeout (5-15 min) to alert user. Can add manual retry button later. |
-| **Video generation takes much longer than expected** (> 15 min) | Polling will continue but UI may feel unresponsive. Document expected duration. Consider adding timeout with manual check link. |
-| **Cloudflare R2 upload fails** | Video stored only on magnific.com temporary URL. Mitigation: Implement retry, or fall back to storing temp URL in SQLite with note about expiration. |
-| **Database file grows unbounded** | SQLite database accumulates sessions indefinitely. For MVP, acceptable. Future: add TTL-based cleanup (e.g., delete sessions > 30 days). |
-| **Multiple chunks trigger video generation simultaneously** | potential rate-limiting from magnific.com. Mitigation: Implement sequential video generation (only one at a time) to stay within API quotas. |
+| **Webhook correlation mechanism fails** (magnific.com doesn't echo chunkId in callback) | POC confirms query params are accepted. If callback doesn't include chunkId, store task_id in D1 and query on receipt. |
+| **Webhook never arrives** (network failure, service outage) | User sees "processing" indefinitely. Add UI timeout (20 min) to alert user. Manual retry button in UI. |
+| **Queue job times out or fails** (fal.ai down, network error) | Queue retries automatically (Cloudflare Queues has built-in retry). After max retries, mark chunk as failed in D1. |
+| **Cloudflare D1 data loss or quota exceeded** | For MVP, D1 quota is generous (1GB+ per account). Data persists. Mitigation: Monitor usage, implement cleanup. |
+| **Video generation takes longer than 20 min** | UI shows timeout warning. Manual retry button triggers resubmission. Polling continues if user stays on page. |
+| **Cloudflare R2 upload fails** | Store magnific.com temporary URL in D1. Add note about 24-48 hour expiration. User can re-generate if needed. |
+| **Multiple chunks process simultaneously** | Cloudflare Queues can handle concurrent jobs. No rate-limiting risk; magnific.com API is called sequentially per chunk. |
+| **ngrok tunnel expires during development** | Get new ngrok URL, update webhook URL in code. Temporary; disappears when deployed to Cloudflare. |
+| **D1 database schema mismatch** | Test migrations locally first. D1 CLI supports schema management. |
 
-## API Routes
+## API Routes (Cloudflare Workers)
 
-- `POST /api/chunks`: Parse and validate chunk input, create session, return sessionId + chunks
-- `GET /api/status?sessionId=<id>`: Return current state of all chunks in session
-- `POST /api/webhooks/fal`: Receive image generation completion, store image URL, trigger video generation
-- `POST /api/webhooks/magnific`: Receive video generation completion, store video URL
+**Worker Routes:**
+- `POST /api/chunks` → Parse chunks, create session, enqueue image jobs, return immediately
+- `GET /api/status?sessionId=<id>` → Query D1, return chunk/task state
+- `POST /api/webhooks/magnific` → Receive video webhook, update D1, trigger next steps
 
-## Database Schema (SQLite)
+**Queue Handler:**
+- `image-generation` queue → Process one image at a time, call fal.ai, store result, trigger video gen
+
+**Webhook Coordination:**
+- Durable Object `session-{sessionId}`: Tracks chunk states, coordinates transitions
+
+## Database Schema (Cloudflare D1)
 
 ```sql
 CREATE TABLE sessions (
@@ -140,12 +195,12 @@ CREATE TABLE sessions (
 );
 
 CREATE TABLE chunks (
-  id TEXT,
-  sessionId TEXT,
+  id TEXT NOT NULL,
+  sessionId TEXT NOT NULL,
   prompt TEXT,
   imagePrompt TEXT,
   videoPrompt TEXT,
-  status TEXT (submitted|image-generating|image-complete|video-generating|complete|failed),
+  status TEXT DEFAULT 'submitted',
   createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (sessionId, id),
@@ -154,10 +209,10 @@ CREATE TABLE chunks (
 
 CREATE TABLE tasks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  chunkId TEXT,
-  sessionId TEXT,
-  taskType TEXT (image|video),
-  status TEXT (pending|processing|completed|failed),
+  chunkId TEXT NOT NULL,
+  sessionId TEXT NOT NULL,
+  taskType TEXT,
+  status TEXT DEFAULT 'pending',
   resultUrl TEXT,
   errorMessage TEXT,
   errorCode TEXT,
@@ -165,12 +220,29 @@ CREATE TABLE tasks (
   updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (sessionId, chunkId) REFERENCES chunks(sessionId, id)
 );
+
+CREATE TABLE queue_jobs (
+  id TEXT PRIMARY KEY,
+  chunkId TEXT NOT NULL,
+  sessionId TEXT NOT NULL,
+  jobType TEXT,
+  status TEXT DEFAULT 'pending',
+  retries INTEGER DEFAULT 0,
+  createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (sessionId, chunkId) REFERENCES chunks(sessionId, id)
+);
 ```
 
-## Open Questions
+## Open Questions / Known Unknowns
 
-1. **Exact webhook correlation mechanism for fal.ai and magnific.com** — Requires POC with test API calls to confirm query parameter passing
-2. **magnific.com video URL persistence** — Are returned video URLs permanent or temporary? If temporary, what's the TTL?
-3. **fal.ai image sizing** — What exact parameter/preset name for 16:9 1920x1080? (e.g., `{ width: 1920, height: 1080 }` vs preset constant)
-4. **Video generation rate limiting** — Does magnific.com have per-second/per-minute quotas? Should we throttle concurrent requests?
-5. **Webhook retry behavior** — If we return non-2xx status, do services retry? Should we implement idempotency checks?
+1. **Cloudflare Queues batch processing** — Can we process multiple chunks' image generation in parallel, or should we enforce sequential processing? (Depends on fal.ai rate limits)
+
+2. **Durable Object billing** — For MVP scale (1-10 concurrent sessions), will Durable Object costs be reasonable? 
+
+3. **D1 migration/deployment** — How to version-control and deploy D1 schema changes as development progresses?
+
+4. **magnific.com webhook retry** — If we return 5xx error, does magnific.com retry? Need to implement idempotency (check if video URL already stored).
+
+5. **Session cleanup in D1** — Should we implement TTL-based deletion of old sessions? D1 doesn't have auto-expiration like some NoSQL databases.
+
+6. **Video URL permanence** — magnific.com URLs: confirmed temporary? How long do they last? Should we download to R2 immediately vs lazy?
