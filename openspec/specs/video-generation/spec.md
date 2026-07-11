@@ -42,7 +42,7 @@ The system SHALL call RunningHub's `rhart-video-g/image-to-video` API to generat
 
 #### Scenario: Video parameters
 - **WHEN** a video request is built
-- **THEN** the body SHALL include the chunk's VIDEO prompt as `prompt`, the fal.ai image URL in `imageUrls`, `aspectRatio: "16:9"`, `resolution: "720p"`, and `duration: 6`
+- **THEN** the body SHALL include the chunk's VIDEO prompt as `prompt`, the fal.ai image URL in `imageUrls`, `aspectRatio: "16:9"`, `resolution: "720p"`, and a `duration` computed from the chunk's spoken PROMPT (see "Derive video duration from the spoken line")
 
 #### Scenario: Image passed by URL
 - **WHEN** the request is built
@@ -77,4 +77,25 @@ The system SHALL store the RunningHub `taskId` to enable polling.
 #### Scenario: Store task id on submit
 - **WHEN** a video job is submitted and a `taskId` is returned
 - **THEN** the system SHALL store it in the chunk's `videoTaskId` column
+
+### Requirement: Derive video duration from the spoken line
+The system SHALL compute each video's `duration` (seconds) from the word count of the chunk's spoken PROMPT using a speaking-rate model, so a clip lasts about as long as its line takes to narrate. The VIDEO (motion) prompt SHALL NOT affect duration.
+
+The model is: `duration = clamp(round(words / 2.5), 6, 30)`, where `words` is the whitespace-delimited word count of the PROMPT, `2.5` is the assumed speaking rate (words/second), and `6`–`30` is RunningHub's valid range.
+
+#### Scenario: Short line uses the minimum
+- **WHEN** the spoken PROMPT has 15 or fewer words
+- **THEN** `duration` SHALL be `6` (the minimum)
+
+#### Scenario: Medium line scales with narration length
+- **WHEN** the spoken PROMPT has 25 words
+- **THEN** `duration` SHALL be `10` (round(25 / 2.5))
+
+#### Scenario: Long line is capped at the maximum
+- **WHEN** the spoken PROMPT is long enough that `round(words / 2.5)` exceeds 30 (roughly 74+ words)
+- **THEN** `duration` SHALL be capped at `30`
+
+#### Scenario: Duration is derived from PROMPT, not the VIDEO prompt
+- **WHEN** a chunk has a short spoken PROMPT but a long VIDEO (motion) prompt
+- **THEN** `duration` SHALL reflect the spoken PROMPT's word count, not the VIDEO prompt's
 
