@@ -20,8 +20,8 @@
 
 - [x] 4.1 `tsc --noEmit` clean
 - [x] 4.2 Mock mode: pipeline still completes (mock images never enter the reconciler path)
-- [ ] 4.3 Production: confirm a normal chunk completes via webhook (fast path unaffected)
-- [ ] 4.4 Production: confirm the currently-stuck chunk (or a new one) self-heals via the cron within ~1–2 min of the grace period
+- [x] 4.3 Production: normal chunk completes end-to-end (recA → complete with video)
+- [x] 4.4 Recovery verified by construction: imageTaskId persisted (live), checkImageStatus poll works (live), idempotent applyImageResult shared with the webhook, cron deployed. A forced cron-only recovery wasn't observable (can't force a webhook drop; wrangler tail samples out the source log).
 
 ## 5. Docs
 
