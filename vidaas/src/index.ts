@@ -6,6 +6,7 @@ import {
   startVideoGeneration,
   parseFalWebhook,
   checkVideoStatus,
+  checkImageStatus,
 } from './lib/generation';
 import { Chunk, Session, ApiStatus, QueueMessage } from './types';
 
@@ -196,21 +197,35 @@ app.post('/api/webhooks/fal', async (c) => {
       return c.json({ success: false, error }, 200); // 200 so fal doesn't redeliver
     }
 
-    await c.env.DB.prepare(
-      "UPDATE chunks SET imageUrl = ?, status = 'image-complete', updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND sessionId = ?"
-    )
-      .bind(url, chunkId, sessionId)
-      .run();
-
-    // Hand off to video generation.
-    await c.env.VIDEO_QUEUE.send({ type: 'video', chunkId, sessionId, imageUrl: url });
-    console.log(`fal webhook: chunk ${chunkId} image-complete → ${url}`);
+    await applyImageResult(c.env, sessionId, chunkId, url, 'webhook');
     return c.json({ success: true, chunkId, imageUrl: url });
   } catch (error) {
     console.error('Error in POST /api/webhooks/fal:', error);
     return c.json({ error: 'Internal server error' }, 500);
   }
 });
+
+// Shared, idempotent image completion used by both the fal webhook and the
+// cron reconciler: store the URL, set image-complete, and enqueue the video
+// job EXACTLY ONCE (the UPDATE only transitions a chunk still lacking an image).
+async function applyImageResult(
+  env: Env,
+  sessionId: string,
+  chunkId: string,
+  url: string,
+  source: string
+): Promise<void> {
+  const res = await env.DB.prepare(
+    "UPDATE chunks SET imageUrl = ?, status = 'image-complete', updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND sessionId = ? AND imageUrl IS NULL"
+  )
+    .bind(url, chunkId, sessionId)
+    .run();
+
+  if ((res.meta?.changes ?? 0) > 0) {
+    await env.VIDEO_QUEUE.send({ type: 'video', chunkId, sessionId, imageUrl: url });
+    console.log(`Image complete (${source}) for chunk ${chunkId} → ${url}`);
+  }
+}
 
 // Note: RunningHub is poll-only (no webhook). Video completion is handled
 // entirely by the cron reconciler via checkVideoStatus + applyVideoResult.
@@ -279,8 +294,15 @@ async function handleImageJob(msg: QueueMessage, env: Env): Promise<void> {
     console.log(`Image complete (mock) for chunk ${chunkId}: ${result.completedImageUrl}`);
     await env.VIDEO_QUEUE.send({ type: 'video', chunkId, sessionId, imageUrl: result.completedImageUrl });
   } else {
-    // Production: submitted to fal queue — completion arrives via /api/webhooks/fal.
-    console.log(`Image generation submitted for chunk ${chunkId}, request ${result.requestId} (awaiting webhook)`);
+    // Production: submitted to fal queue. Completion arrives via /api/webhooks/fal
+    // (fast path); the stored request id lets the cron reconciler recover the
+    // chunk if that webhook is missed.
+    await env.DB.prepare(
+      'UPDATE chunks SET imageTaskId = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND sessionId = ?'
+    )
+      .bind(result.requestId ?? null, chunkId, sessionId)
+      .run();
+    console.log(`Image generation submitted for chunk ${chunkId}, request ${result.requestId} (awaiting webhook/cron)`);
   }
 }
 
@@ -341,7 +363,33 @@ async function reconcileVideos(env: Env): Promise<void> {
       const { status, videoUrl } = await checkVideoStatus(chunk.videoTaskId, env);
       await applyVideoResult(env, chunk.sessionId, chunk.id, status, videoUrl);
     } catch (error) {
-      console.error(`Cron: failed to check chunk ${chunk.id}:`, error instanceof Error ? error.message : error);
+      console.error(`Cron: failed to check video chunk ${chunk.id}:`, error instanceof Error ? error.message : error);
+    }
+  }
+}
+
+/**
+ * Cron reconciler (safety net): recover chunks whose fal image webhook was
+ * missed. Only polls chunks stuck in `image-generating` past a ~90s grace
+ * period (so the webhook gets first crack). Recovers successes only.
+ */
+async function reconcileImages(env: Env): Promise<void> {
+  const rows = await env.DB.prepare(
+    "SELECT id, sessionId, imageTaskId FROM chunks WHERE status = 'image-generating' AND imageTaskId IS NOT NULL AND updatedAt < datetime('now', '-90 seconds') LIMIT 50"
+  ).all<{ id: string; sessionId: string; imageTaskId: string }>();
+
+  const chunks = rows.results || [];
+  if (chunks.length === 0) return;
+  console.log(`Cron: reconciling ${chunks.length} image-generating chunk(s)`);
+
+  for (const chunk of chunks) {
+    try {
+      const { url } = await checkImageStatus(chunk.imageTaskId, env);
+      if (url) {
+        await applyImageResult(env, chunk.sessionId, chunk.id, url, 'cron');
+      }
+    } catch (error) {
+      console.error(`Cron: failed to check image chunk ${chunk.id}:`, error instanceof Error ? error.message : error);
     }
   }
 }
@@ -366,7 +414,7 @@ export default {
   fetch: app.fetch,
 
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(reconcileVideos(env));
+    ctx.waitUntil(Promise.all([reconcileVideos(env), reconcileImages(env)]));
   },
 
   async queue(batch: MessageBatch<QueueMessage>, env: Env): Promise<void> {

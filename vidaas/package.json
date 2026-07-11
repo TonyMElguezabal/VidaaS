@@ -10,8 +10,8 @@
     "typecheck": "tsc --noEmit",
     "cf-typegen": "wrangler types",
     "ngrok": "ngrok http 8787",
-    "db:migrate:local": "wrangler d1 execute vidaas --local --file src/migrations/0001_init.sql && wrangler d1 execute vidaas --local --file src/migrations/0002_add_error_column.sql && wrangler d1 execute vidaas --local --file src/migrations/0003_add_video_task_id.sql",
-    "db:migrate:remote": "wrangler d1 execute vidaas --remote --file src/migrations/0001_init.sql && wrangler d1 execute vidaas --remote --file src/migrations/0002_add_error_column.sql && wrangler d1 execute vidaas --remote --file src/migrations/0003_add_video_task_id.sql",
+    "db:migrate:local": "wrangler d1 execute vidaas --local --file src/migrations/0001_init.sql && wrangler d1 execute vidaas --local --file src/migrations/0002_add_error_column.sql && wrangler d1 execute vidaas --local --file src/migrations/0003_add_video_task_id.sql && wrangler d1 execute vidaas --local --file src/migrations/0004_add_image_task_id.sql",
+    "db:migrate:remote": "wrangler d1 execute vidaas --remote --file src/migrations/0001_init.sql && wrangler d1 execute vidaas --remote --file src/migrations/0002_add_error_column.sql && wrangler d1 execute vidaas --remote --file src/migrations/0003_add_video_task_id.sql && wrangler d1 execute vidaas --remote --file src/migrations/0004_add_image_task_id.sql",
     "queues:create": "wrangler queues create image-generation && wrangler queues create video-generation",
     "r2:create": "wrangler r2 bucket create vidaas-videos --jurisdiction eu"
   },

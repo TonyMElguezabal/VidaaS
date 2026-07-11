@@ -10,6 +10,9 @@ export interface GenerationEnv {
 const useMocks = (env: GenerationEnv) => env.ENVIRONMENT !== 'production';
 
 const FAL_MODEL = 'bytedance/seedream/v5/pro/text-to-image';
+// Base for polling a submitted request's result by id (POC-verified: fal
+// truncates the model path to owner/app for the requests endpoint).
+const FAL_REQUESTS_BASE = 'https://queue.fal.run/bytedance/seedream/requests';
 
 export interface ImageGenerationResult {
   /**
@@ -84,6 +87,28 @@ export function buildFalWebhookUrl(baseUrl: string, sessionId: string, chunkId: 
   url.searchParams.set('sessionId', sessionId);
   url.searchParams.set('chunkId', chunkId);
   return url.toString();
+}
+
+/**
+ * Poll fal for a submitted image request's result (cron reconciler fallback
+ * when the webhook is missed). A completed request returns { images: [{url}] };
+ * an in-progress one returns { detail: "…in progress", … }. Conservative: only
+ * reports success — anything else is treated as still pending.
+ */
+export async function checkImageStatus(
+  requestId: string,
+  env: GenerationEnv
+): Promise<{ url?: string; pending?: boolean }> {
+  const response = await fetch(`${FAL_REQUESTS_BASE}/${requestId}`, {
+    headers: { Authorization: `Key ${env.FAL_API_KEY ?? ''}` },
+  });
+  if (!response.ok) {
+    throw new Error(`fal status error ${response.status}`);
+  }
+  const body: any = await response.json();
+  const url = body?.images?.[0]?.url;
+  if (url) return { url };
+  return { pending: true };
 }
 
 export interface VideoGenerationResult {

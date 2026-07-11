@@ -228,6 +228,11 @@ vidaas/
   with a webhook → `/api/webhooks/fal`. RunningHub (video) is **poll-only** —
   submit returns a `taskId`, and the cron trigger polls `POST /openapi/v2/query`
   every minute until `SUCCESS`.
+- **Both stages have a cron safety net.** The stored fal `request_id`
+  (`imageTaskId`) and RunningHub `taskId` (`videoTaskId`) let the cron reconciler
+  recover chunks whose webhook/poll was missed: `reconcileImages` polls fal for
+  `image-generating` chunks stuck past a ~90s grace, `reconcileVideos` polls
+  RunningHub. Completion is idempotent (exactly-once video enqueue).
 - **Videos are stored as RunningHub URLs**, which **expire 24 hours** after
   generation. The UI warns users to download within 24h. Re-hosting to R2 is
   deferred (Option B).

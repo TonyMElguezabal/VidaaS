@@ -23,12 +23,19 @@ Per-chunk state machine:
   APIs are called and no credits are spent (`src/lib/generation.ts`). In mock
   mode video "completes" immediately via `completedVideoUrl`; in production the
   video completes when the cron reconciler polls RunningHub.
-- **Image is webhook-driven; video is poll-only.** Image uses fal's **queue**
-  endpoint (`queue.fal.run/...?fal_webhook=`) → `/api/webhooks/fal`. The
-  synchronous `fal.run` endpoint times out with a 524 for this slow model — do
-  not use it. Video uses **RunningHub** (`/openapi/v2/rhart-video-g/image-to-video`,
-  Bearer auth); there is **no video webhook** — the **cron reconciler** (`* * * * *`)
-  polls `POST /openapi/v2/query` and maps `SUCCESS → complete`.
+- **Image is webhook-driven; video is poll-only. Both have a cron safety net.**
+  Image uses fal's **queue** endpoint (`queue.fal.run/...?fal_webhook=`) →
+  `/api/webhooks/fal`. The synchronous `fal.run` endpoint times out with a 524
+  for this slow model — do not use it. Video uses **RunningHub**
+  (`/openapi/v2/rhart-video-g/image-to-video`, Bearer); there is **no video
+  webhook**. The **cron reconciler** (`* * * * *`) runs BOTH `reconcileVideos`
+  (poll `/openapi/v2/query`, `SUCCESS → complete`) and `reconcileImages` (poll
+  `queue.fal.run/bytedance/seedream/requests/{request_id}` for chunks stuck in
+  `image-generating` past a ~90s grace, recovering a missed fal webhook). Stored
+  ids: `videoTaskId` (RunningHub) and `imageTaskId` (fal request_id).
+- **`applyImageResult` / `applyVideoResult` are idempotent** (guarded UPDATEs +
+  `meta.changes` / `status != 'complete'`), so webhook⇄cron races complete a
+  chunk and enqueue the next stage exactly once. Don't remove those guards.
 - **fal webhook correlation** uses BOTH `sessionId` and `chunkId` query params
   (chunk IDs are user-supplied and not globally unique). The handler is
   idempotent — don't remove that guard.
