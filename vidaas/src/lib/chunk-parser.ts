@@ -9,16 +9,35 @@ const ChunkSchema = z.object({
 
 export type ParsedChunk = z.infer<typeof ChunkSchema>;
 
+// A delimiter is a line consisting ONLY of dashes: an em dash (—), en dash (–),
+// or a markdown horizontal rule (--- or more). This avoids splitting on em
+// dashes that appear *inline* within prose (e.g. "discovery—no camera movement").
+const DELIMITER_LINE = /^\s*(?:—+|–+|-{3,})\s*$/;
+
+function splitIntoSections(input: string): string[] {
+  const sections: string[] = [];
+  let current: string[] = [];
+  for (const line of input.split('\n')) {
+    if (DELIMITER_LINE.test(line)) {
+      if (current.some((l) => l.trim())) sections.push(current.join('\n'));
+      current = [];
+    } else {
+      current.push(line);
+    }
+  }
+  if (current.some((l) => l.trim())) sections.push(current.join('\n'));
+  return sections;
+}
+
 export function parseChunks(input: string): { chunks: ParsedChunk[]; errors: string[] } {
   const chunks: ParsedChunk[] = [];
   const errors: string[] = [];
-  const delimiter = '—';
 
-  // Split by delimiter and filter empty sections
-  const sections = input.split(delimiter).filter((s) => s.trim());
+  // Split on delimiter lines only (not inline dashes within a field's text).
+  const sections = splitIntoSections(input);
 
   if (sections.length === 0) {
-    errors.push('No chunks found. Use "—" to separate chunks.');
+    errors.push('No chunks found. Separate chunks with a line containing only "—".');
     return { chunks, errors };
   }
 
@@ -48,48 +67,60 @@ export function parseChunks(input: string): { chunks: ParsedChunk[]; errors: str
   return { chunks, errors };
 }
 
+// Field labels, matched case-insensitively at the start of a (markdown-cleaned)
+// line, tolerating "LABEL:" or "LABEL :" with the value on the same line.
+const FIELD_LABELS: Array<[RegExp, keyof ParsedChunk]> = [
+  [/^id\s*:\s*/i, 'id'],
+  [/^prompt\s*:\s*/i, 'prompt'],
+  [/^image\s*:\s*/i, 'imagePrompt'],
+  [/^video\s*:\s*/i, 'videoPrompt'],
+];
+
+// Strip markdown emphasis/heading/list markers so labels like "**IMAGE:**"
+// or "- IMAGE:" are recognized. Applied per line before label detection.
+function cleanLine(line: string): string {
+  return line
+    .replace(/\*\*/g, '') // bold
+    .replace(/^\s*#+\s*/, '') // heading
+    .replace(/^\s*[-*]\s+/, '') // list bullet
+    .replace(/\*/g, '') // stray italics
+    .trim();
+}
+
 function parseChunkSection(section: string): ParsedChunk {
-  const lines = section.split('\n').map((line) => line.trim());
+  const lines = section.split('\n');
   const fields: Partial<ParsedChunk> = {};
 
   let currentField: keyof ParsedChunk | null = null;
   let currentValue = '';
 
-  for (const line of lines) {
-    if (line.startsWith('ID:')) {
-      if (currentField) {
-        fields[currentField] = currentValue.trim();
+  const flush = () => {
+    if (currentField) fields[currentField] = currentValue.trim();
+  };
+
+  for (const raw of lines) {
+    const line = cleanLine(raw);
+    if (!line) continue;
+
+    let matched = false;
+    for (const [re, field] of FIELD_LABELS) {
+      const m = line.match(re);
+      if (m) {
+        flush();
+        currentField = field;
+        currentValue = line.slice(m[0].length).trim();
+        matched = true;
+        break;
       }
-      currentField = 'id';
-      currentValue = line.replace('ID:', '').trim();
-    } else if (line.startsWith('PROMPT:')) {
-      if (currentField) {
-        fields[currentField] = currentValue.trim();
-      }
-      currentField = 'prompt';
-      currentValue = line.replace('PROMPT:', '').trim();
-    } else if (line.startsWith('IMAGE:')) {
-      if (currentField) {
-        fields[currentField] = currentValue.trim();
-      }
-      currentField = 'imagePrompt';
-      currentValue = line.replace('IMAGE:', '').trim();
-    } else if (line.startsWith('VIDEO:')) {
-      if (currentField) {
-        fields[currentField] = currentValue.trim();
-      }
-      currentField = 'videoPrompt';
-      currentValue = line.replace('VIDEO:', '').trim();
-    } else if (line && currentField) {
-      // Continue accumulating value for current field
+    }
+
+    if (!matched && currentField) {
+      // Continuation of the current field's value.
       currentValue += ' ' + line;
     }
   }
 
-  // Store the last field
-  if (currentField) {
-    fields[currentField] = currentValue.trim();
-  }
+  flush();
 
   return ChunkSchema.parse({
     id: fields.id || '',
