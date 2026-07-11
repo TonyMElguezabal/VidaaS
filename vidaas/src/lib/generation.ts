@@ -150,3 +150,34 @@ export function buildMagnificWebhookUrl(baseUrl: string, sessionId: string, chun
   url.searchParams.set('chunkId', chunkId);
   return url.toString();
 }
+
+/**
+ * Parse a magnific.com task result. Tolerant of both shapes:
+ *  - GET status:  { data: { task_id, status, generated: ["<url>"] } }
+ *  - webhook:     { task_id, status, generated: ["<url>"] }   (no data wrapper)
+ * `generated` items are plain URL strings (older shapes used { url }).
+ */
+export function parseMagnificResult(body: any): { status?: string; videoUrl?: string } {
+  const d = body?.data ?? body;
+  const first = d?.generated?.[0];
+  const videoUrl = typeof first === 'string' ? first : first?.url;
+  return { status: d?.status, videoUrl };
+}
+
+/**
+ * Poll magnific.com for a task's current status/result.
+ * Used by the cron reconciler as the authoritative completion path.
+ */
+export async function checkVideoStatus(
+  taskId: string,
+  env: GenerationEnv
+): Promise<{ status?: string; videoUrl?: string }> {
+  const response = await fetch(
+    `https://api.magnific.com/v1/ai/image-to-video/kling-v2-5-pro/${taskId}`,
+    { headers: { 'x-magnific-api-key': env.MAGNIFIC_API_KEY ?? '' } }
+  );
+  if (!response.ok) {
+    throw new Error(`magnific.com status error ${response.status}`);
+  }
+  return parseMagnificResult(await response.json());
+}

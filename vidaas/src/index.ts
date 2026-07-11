@@ -1,7 +1,13 @@
 import { Hono } from 'hono';
 import { v4 as uuidv4 } from 'uuid';
 import { parseChunks } from './lib/chunk-parser';
-import { startImageGeneration, startVideoGeneration, parseFalWebhook } from './lib/generation';
+import {
+  startImageGeneration,
+  startVideoGeneration,
+  parseFalWebhook,
+  parseMagnificResult,
+  checkVideoStatus,
+} from './lib/generation';
 import { Chunk, Session, ApiStatus, QueueMessage } from './types';
 
 export type Env = {
@@ -207,7 +213,8 @@ app.post('/api/webhooks/fal', async (c) => {
   }
 });
 
-// POST /api/webhooks/magnific - Receive video completion webhook
+// POST /api/webhooks/magnific - Receive video completion webhook (fast path;
+// the cron reconciler is the authoritative fallback if this never arrives).
 app.post('/api/webhooks/magnific', async (c) => {
   try {
     const chunkId = c.req.query('chunkId');
@@ -216,11 +223,6 @@ app.post('/api/webhooks/magnific', async (c) => {
 
     if (!chunkId || !sessionId) {
       return c.json({ error: 'Missing chunkId or sessionId in webhook URL' }, 400);
-    }
-
-    const videoUrl = body?.data?.generated?.[0]?.url;
-    if (!videoUrl) {
-      return c.json({ error: 'No video URL in webhook payload' }, 400);
     }
 
     const chunk = await c.env.DB.prepare(
@@ -232,19 +234,15 @@ app.post('/api/webhooks/magnific', async (c) => {
       return c.json({ error: 'Chunk not found' }, 404);
     }
 
-    // Idempotency: if already complete with a video, don't reprocess.
+    // Idempotency: already complete.
     if (chunk.status === 'complete' && chunk.videoUrl) {
       return c.json({ success: true, chunkId, videoUrl: chunk.videoUrl, idempotent: true });
     }
 
-    await c.env.DB.prepare(
-      "UPDATE chunks SET videoUrl = ?, status = 'complete', updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND sessionId = ?"
-    )
-      .bind(videoUrl, chunkId, sessionId)
-      .run();
-
-    console.log(`Video webhook: chunk ${chunkId} complete → ${videoUrl}`);
-    return c.json({ success: true, chunkId, videoUrl });
+    // magnific webhook has NO `data` wrapper; generated[] holds URL strings.
+    const { status, videoUrl } = parseMagnificResult(body);
+    const outcome = await applyVideoResult(c.env, sessionId, chunkId, status, videoUrl);
+    return c.json({ success: outcome !== 'error', chunkId, status, videoUrl }, 200);
   } catch (error) {
     console.error('Error in POST /api/webhooks/magnific:', error);
     return c.json({ error: 'Internal server error' }, 500);
@@ -252,6 +250,37 @@ app.post('/api/webhooks/magnific', async (c) => {
 });
 
 app.get('/health', (c) => c.json({ status: 'ok' }));
+
+// Shared video-completion logic used by both the webhook and the cron poller.
+// Returns 'complete' | 'failed' | 'pending' | 'error'.
+async function applyVideoResult(
+  env: Env,
+  sessionId: string,
+  chunkId: string,
+  status: string | undefined,
+  videoUrl: string | undefined
+): Promise<'complete' | 'failed' | 'pending' | 'error'> {
+  const s = (status || '').toUpperCase();
+  if (s === 'COMPLETED' && videoUrl) {
+    await env.DB.prepare(
+      "UPDATE chunks SET videoUrl = ?, status = 'complete', updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND sessionId = ? AND status != 'complete'"
+    )
+      .bind(videoUrl, chunkId, sessionId)
+      .run();
+    console.log(`Video complete for chunk ${chunkId} → ${videoUrl}`);
+    return 'complete';
+  }
+  if (s === 'FAILED' || s === 'ERROR') {
+    await env.DB.prepare(
+      "UPDATE chunks SET status = 'failed', error = 'Video generation failed', updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND sessionId = ?"
+    )
+      .bind(chunkId, sessionId)
+      .run();
+    return 'failed';
+  }
+  // CREATED / IN_PROGRESS / unknown-without-url → still pending.
+  return status ? 'pending' : 'error';
+}
 
 // ---------------------------------------------------------------------------
 // Queue consumers
@@ -308,7 +337,8 @@ async function handleVideoJob(msg: QueueMessage, env: Env): Promise<void> {
   );
 
   // In mock mode the video is already "done" — complete it now.
-  // In production, completion arrives via the magnific webhook.
+  // In production, store the task_id; completion arrives via the magnific
+  // webhook (fast path) or the cron reconciler (authoritative fallback).
   if (result.completedVideoUrl) {
     await env.DB.prepare(
       "UPDATE chunks SET videoUrl = ?, status = 'complete', updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND sessionId = ?"
@@ -317,7 +347,36 @@ async function handleVideoJob(msg: QueueMessage, env: Env): Promise<void> {
       .run();
     console.log(`Video complete (mock) for chunk ${chunkId}: ${result.completedVideoUrl}`);
   } else {
-    console.log(`Video generation started for chunk ${chunkId}, task ${result.taskId} (awaiting webhook)`);
+    await env.DB.prepare(
+      'UPDATE chunks SET videoTaskId = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND sessionId = ?'
+    )
+      .bind(result.taskId, chunkId, sessionId)
+      .run();
+    console.log(`Video generation started for chunk ${chunkId}, task ${result.taskId} (awaiting webhook/cron)`);
+  }
+}
+
+/**
+ * Cron reconciler: find video-generating chunks with a stored magnific task_id
+ * and poll magnific for their result. This is the authoritative completion path
+ * (webhooks are a best-effort fast path).
+ */
+async function reconcileVideos(env: Env): Promise<void> {
+  const rows = await env.DB.prepare(
+    "SELECT id, sessionId, videoTaskId FROM chunks WHERE status = 'video-generating' AND videoTaskId IS NOT NULL LIMIT 50"
+  ).all<{ id: string; sessionId: string; videoTaskId: string }>();
+
+  const chunks = rows.results || [];
+  if (chunks.length === 0) return;
+  console.log(`Cron: reconciling ${chunks.length} video-generating chunk(s)`);
+
+  for (const chunk of chunks) {
+    try {
+      const { status, videoUrl } = await checkVideoStatus(chunk.videoTaskId, env);
+      await applyVideoResult(env, chunk.sessionId, chunk.id, status, videoUrl);
+    } catch (error) {
+      console.error(`Cron: failed to check chunk ${chunk.id}:`, error instanceof Error ? error.message : error);
+    }
   }
 }
 
@@ -339,6 +398,10 @@ async function markFailed(env: Env, sessionId: string, chunkId: string, error: s
 
 export default {
   fetch: app.fetch,
+
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(reconcileVideos(env));
+  },
 
   async queue(batch: MessageBatch<QueueMessage>, env: Env): Promise<void> {
     for (const message of batch.messages) {

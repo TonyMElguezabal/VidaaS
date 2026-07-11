@@ -23,8 +23,11 @@ Per-chunk state machine:
   APIs are called and no credits are spent (`src/lib/generation.ts`). In mock
   mode video "completes" immediately via `completedVideoUrl`; in production it
   completes asynchronously through `POST /api/webhooks/magnific`.
-- **Image gen is synchronous** (fal.ai returns the URL inline); only **video**
-  is webhook-driven.
+- **Both image and video are async.** Image uses fal's **queue** endpoint
+  (`queue.fal.run/...?fal_webhook=`) → `/api/webhooks/fal`. The synchronous
+  `fal.run` endpoint times out with a 524 for this slow model — do not use it.
+  Video uses magnific + `/api/webhooks/magnific`, with a **cron reconciler**
+  (`* * * * *`) polling the magnific GET endpoint as the authoritative fallback.
 - **Webhook correlation** uses BOTH `sessionId` and `chunkId` query params
   (chunk IDs are user-supplied and not globally unique). The webhook is
   idempotent — don't remove that guard.
@@ -57,6 +60,11 @@ Run `wrangler types` after changing bindings in `wrangler.jsonc`.
   directly instead of self-POSTing a webhook.
 - **`0002_add_error_column.sql`** is an `ALTER TABLE ADD COLUMN`; it errors if
   run twice (column exists) — safe to ignore on re-run.
+- **magnific webhook shape**: the callback is the GET response *minus* the
+  `data` wrapper, and `generated` is an array of plain URL **strings** (not
+  `{url}` objects). GET status: `GET /v1/ai/image-to-video/kling-v2-5-pro/{task_id}`
+  → `{ data: { status, generated: ["<mp4 url>"] } }`. `parseMagnificResult`
+  tolerates both shapes.
 - **Cloudflare Queues require the Workers Paid plan** — `wrangler deploy` fails
   otherwise.
 - After editing `wrangler.jsonc` bindings, regenerate types and restart `dev`.

@@ -57,6 +57,11 @@
 		]
 	},
 
+	/* Cron: reconcile video-generating chunks against magnific every minute */
+	"triggers": {
+		"crons": ["* * * * *"]
+	},
+
 	/* R2 binding omitted: not used in the MVP (videos are stored as
 	 * magnific.com URLs per the Option B decision). Re-add once R2 is
 	 * enabled on the account and download-to-R2 is wired up.
