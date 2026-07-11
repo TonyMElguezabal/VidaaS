@@ -209,6 +209,7 @@ VIDEO: Warry notices the toxic leak and quickly steps back with a serious expres
 				const [errors, setErrors] = useState([]);
 				const [submitting, setSubmitting] = useState(false);
 				const [resumed, setResumed] = useState(false);
+				const [downloading, setDownloading] = useState(false);
 				const [toast, setToast] = useState(null);
 				const pollRef = useRef(null);
 				const toastRef = useRef(null);
@@ -297,8 +298,33 @@ VIDEO: Warry notices the toxic leak and quickly steps back with a serious expres
 					setInput(EXAMPLE);
 				}
 
+				// Trigger one download per video, in chunk order, via the same-origin
+				// /api/download endpoint (which streams with Content-Disposition so the
+				// browser downloads rather than navigates). Staggered so the browser
+				// registers each as a separate download.
+				async function downloadAll() {
+					if (downloading) return;
+					setDownloading(true);
+					notify('Starting ' + chunks.length + ' downloads…');
+					try {
+						for (const c of chunks) {
+							if (c.status !== 'complete' || !c.videoUrl) continue;
+							const a = document.createElement('a');
+							a.href = '/api/download?sessionId=' + encodeURIComponent(sessionId) + '&chunkId=' + encodeURIComponent(c.id);
+							a.download = c.id + '.mp4';
+							document.body.appendChild(a);
+							a.click();
+							a.remove();
+							await new Promise(r => setTimeout(r, 800));
+						}
+					} finally {
+						setDownloading(false);
+					}
+				}
+
 				const doneCount = chunks.filter(c => c.status === 'complete').length;
 				const failedCount = chunks.filter(c => c.status === 'failed').length;
+				const allComplete = chunks.length > 0 && chunks.every(c => c.status === 'complete' && c.videoUrl);
 
 				return html`<div class="mx-auto max-w-3xl px-4 py-8">
 					<header class="mb-6">
@@ -339,8 +365,18 @@ VIDEO: Warry notices the toxic leak and quickly steps back with a serious expres
 									</p>
 									<p class="text-[11px] text-slate-400 font-mono">session ${sessionId.slice(0,8)}…</p>
 								</div>
-								<button onClick=${reset} class="text-sm text-slate-500 hover:text-slate-800 underline">New batch</button>
+								<div class="flex items-center gap-3">
+									${allComplete && html`<button onClick=${downloadAll} disabled=${downloading}
+										class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">
+										⬇ ${downloading ? 'Downloading…' : 'Download all videos'}
+									</button>`}
+									<button onClick=${reset} class="text-sm text-slate-500 hover:text-slate-800 underline">New batch</button>
+								</div>
 							</div>
+
+							${allComplete && html`<p class="text-[11px] text-slate-400">
+								Downloads ${chunks.length} videos one by one — your browser may ask to allow multiple downloads.
+							</p>`}
 
 							<${TimeoutBanner} createdAt=${createdAt} chunks=${chunks} />
 

@@ -240,6 +240,12 @@ vidaas/
   "Copy URL" button and an "Open ↗" link; right-clicking an image also copies
   its URL. Copy uses the Clipboard API (with an `execCommand` fallback) and a
   transient toast. The image URL is the persistent fal.ai CDN URL.
+- **Download all videos**: once every chunk is `complete`, a "Download all
+  videos" button fires one download per chunk, in order, as separate files (not
+  zipped). Downloads go through a same-origin `GET /api/download?sessionId=&chunkId=`
+  that streams the video with `Content-Disposition: attachment` — needed because
+  the RunningHub URLs are cross-origin (where the `download` attribute is ignored).
+  The endpoint resolves the URL from the chunk record, so it is not an open proxy.
 - **Video params**: `aspectRatio 16:9`, `resolution 720p`. `duration` is
   **computed from the spoken PROMPT** (not the VIDEO/motion prompt) via a
   speaking-rate model — `clamp(round(words / 2.5), 6, 30)` — so a clip lasts

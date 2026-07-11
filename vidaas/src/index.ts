@@ -161,6 +161,44 @@ app.post('/api/retry', async (c) => {
   }
 });
 
+// GET /api/download - Stream a chunk's video as an attachment (same-origin, so
+// the browser's download attribute works even though the source is cross-origin).
+// Looks the URL up by sessionId+chunkId to avoid being an open proxy.
+app.get('/api/download', async (c) => {
+  try {
+    const sessionId = c.req.query('sessionId');
+    const chunkId = c.req.query('chunkId');
+    if (!sessionId || !chunkId) {
+      return c.json({ error: 'sessionId and chunkId are required' }, 400);
+    }
+
+    const chunk = await c.env.DB.prepare(
+      'SELECT videoUrl FROM chunks WHERE id = ? AND sessionId = ?'
+    )
+      .bind(chunkId, sessionId)
+      .first<{ videoUrl: string | null }>();
+    if (!chunk?.videoUrl) {
+      return c.json({ error: 'No video for this chunk' }, 404);
+    }
+
+    const upstream = await fetch(chunk.videoUrl);
+    if (!upstream.ok || !upstream.body) {
+      return c.json({ error: `Upstream video error ${upstream.status}` }, 502);
+    }
+
+    const safeName = chunkId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const headers = new Headers();
+    headers.set('Content-Type', upstream.headers.get('Content-Type') || 'video/mp4');
+    headers.set('Content-Disposition', `attachment; filename="${safeName}.mp4"`);
+    const len = upstream.headers.get('Content-Length');
+    if (len) headers.set('Content-Length', len);
+    return new Response(upstream.body, { headers });
+  } catch (error) {
+    console.error('Error in GET /api/download:', error);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
 // POST /api/webhooks/fal - Receive image completion webhook (fal async queue)
 app.post('/api/webhooks/fal', async (c) => {
   try {
