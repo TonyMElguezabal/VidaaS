@@ -130,6 +130,7 @@ export async function startVideoGeneration(
       negative_prompt: 'low quality, blurry, distorted',
       cfg_scale: 0.5,
       duration: '5',
+      resolution: '720p',
     }),
   });
 
