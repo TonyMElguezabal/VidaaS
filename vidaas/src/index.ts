@@ -288,17 +288,17 @@ async function handleVideoJob(msg: QueueMessage, env: Env): Promise<void> {
   const { chunkId, sessionId } = msg;
 
   const chunk = await env.DB.prepare(
-    'SELECT imageUrl, videoPrompt FROM chunks WHERE id = ? AND sessionId = ?'
+    'SELECT imageUrl, videoPrompt, prompt FROM chunks WHERE id = ? AND sessionId = ?'
   )
     .bind(chunkId, sessionId)
-    .first<{ imageUrl: string | null; videoPrompt: string }>();
+    .first<{ imageUrl: string | null; videoPrompt: string; prompt: string }>();
   if (!chunk) throw new Error(`Chunk not found: ${sessionId}/${chunkId}`);
   if (!chunk.imageUrl) throw new Error(`No image for chunk ${chunkId}, cannot generate video`);
 
   await setStatus(env, sessionId, chunkId, 'video-generating');
 
   const result = await startVideoGeneration(
-    { imageUrl: chunk.imageUrl, prompt: chunk.videoPrompt, chunkId, sessionId },
+    { imageUrl: chunk.imageUrl, prompt: chunk.videoPrompt, spokenPrompt: chunk.prompt, chunkId, sessionId },
     env
   );
 

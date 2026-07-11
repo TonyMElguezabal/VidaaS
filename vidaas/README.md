@@ -235,8 +235,10 @@ vidaas/
   "Copy URL" button and an "Open ↗" link; right-clicking an image also copies
   its URL. Copy uses the Clipboard API (with an `execCommand` fallback) and a
   transient toast. The image URL is the persistent fal.ai CDN URL.
-- **Video params are fixed**: `aspectRatio 16:9`, `resolution 720p`,
-  `duration 6` (RunningHub's minimum).
+- **Video params**: `aspectRatio 16:9`, `resolution 720p`. `duration` is
+  **computed from the spoken PROMPT** (not the VIDEO/motion prompt) via a
+  speaking-rate model — `clamp(round(words / 2.5), 6, 30)` — so a clip lasts
+  about as long as its line takes to narrate.
 - **Sessions live in D1** and are referenced from `localStorage` (URLs/refs
   only, never binary content) with a 2-day TTL and auto-resume on reload.
 - **Retries**: queue jobs retry up to 3 times (same chunk ID); after that the

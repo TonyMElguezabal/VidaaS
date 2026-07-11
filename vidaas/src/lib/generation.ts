@@ -99,13 +99,31 @@ export interface VideoGenerationResult {
 const RUNNINGHUB_SUBMIT = 'https://www.runninghub.ai/openapi/v2/rhart-video-g/image-to-video';
 const RUNNINGHUB_QUERY = 'https://www.runninghub.ai/openapi/v2/query';
 
+// Assumed narration pace (words/second, ~150 wpm) and RunningHub's valid range.
+const SPEAKING_WPS = 2.5;
+const MIN_DURATION = 6;
+const MAX_DURATION = 30;
+
+/**
+ * Compute a video's duration (seconds) from the spoken PROMPT's length, so the
+ * clip lasts about as long as the line takes to narrate. Speaking-rate model:
+ * clamp(round(words / 2.5), 6, 30). The VIDEO/motion prompt does NOT affect this.
+ */
+export function videoDurationFor(spokenLine: string): number {
+  const words = (spokenLine || '').trim().split(/\s+/).filter(Boolean).length;
+  const raw = Math.round(words / SPEAKING_WPS);
+  return Math.min(MAX_DURATION, Math.max(MIN_DURATION, raw));
+}
+
 /**
  * Kick off video generation via RunningHub (rhart-video-g/image-to-video).
  * Poll-only — completion is detected by the cron reconciler via checkVideoStatus.
+ * `prompt` is the VIDEO/motion instruction (sent to the API); `spokenPrompt` is
+ * the narrated line, used only to derive `duration`.
  * In mock mode returns a completedVideoUrl so the pipeline finishes locally.
  */
 export async function startVideoGeneration(
-  params: { imageUrl: string; prompt: string; chunkId: string; sessionId: string },
+  params: { imageUrl: string; prompt: string; spokenPrompt: string; chunkId: string; sessionId: string },
   env: GenerationEnv
 ): Promise<VideoGenerationResult> {
   if (useMocks(env)) {
@@ -118,6 +136,9 @@ export async function startVideoGeneration(
     };
   }
 
+  const duration = videoDurationFor(params.spokenPrompt);
+  console.log(`RunningHub submit chunk ${params.chunkId}: duration=${duration}s (from spoken PROMPT)`);
+
   const response = await fetch(RUNNINGHUB_SUBMIT, {
     method: 'POST',
     headers: {
@@ -129,7 +150,7 @@ export async function startVideoGeneration(
       aspectRatio: '16:9',
       imageUrls: [params.imageUrl],
       resolution: '720p',
-      duration: 6,
+      duration,
     }),
   });
 

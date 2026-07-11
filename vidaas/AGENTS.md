@@ -63,9 +63,12 @@ Run `wrangler types` after changing bindings in `wrangler.jsonc`.
   run twice (column exists) — safe to ignore on re-run.
 - **RunningHub video (poll-only)**: submit `POST /openapi/v2/rhart-video-g/image-to-video`
   (Bearer) with `{prompt, aspectRatio:"16:9", imageUrls:[falUrl], resolution:"720p",
-  duration:6}` → `{taskId, status:"QUEUED"}`. Poll `POST /openapi/v2/query {taskId}`
+  duration}` → `{taskId, status:"QUEUED"}`. Poll `POST /openapi/v2/query {taskId}`
   → `{status, results:[{url, outputType:"mp4"}]}`. Statuses: QUEUED/RUNNING/SUCCESS/FAILED.
   `imageUrls` accepts public URLs (no upload). Result URLs expire in 24h.
+- **`duration` is derived from the spoken PROMPT, not the VIDEO prompt**:
+  `videoDurationFor()` = `clamp(round(words / 2.5), 6, 30)` (speaking-rate model).
+  The VIDEO/motion prompt is still what's sent as the API `prompt`.
 - **`global_fetch_strictly_public`** compat flag also means mock mode returns the
   completed video URL directly (no self-POST); real image completion comes via
   fal's inbound webhook, which is fine.
