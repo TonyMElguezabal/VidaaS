@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { v4 as uuidv4 } from 'uuid';
 import { parseChunks } from './lib/chunk-parser';
-import { generateImage, startVideoGeneration } from './lib/generation';
+import { startImageGeneration, startVideoGeneration, parseFalWebhook } from './lib/generation';
 import { Chunk, Session, ApiStatus, QueueMessage } from './types';
 
 export type Env = {
@@ -155,6 +155,58 @@ app.post('/api/retry', async (c) => {
   }
 });
 
+// POST /api/webhooks/fal - Receive image completion webhook (fal async queue)
+app.post('/api/webhooks/fal', async (c) => {
+  try {
+    const chunkId = c.req.query('chunkId');
+    const sessionId = c.req.query('sessionId');
+    const body = await c.req.json();
+
+    if (!chunkId || !sessionId) {
+      return c.json({ error: 'Missing chunkId or sessionId in webhook URL' }, 400);
+    }
+
+    const chunk = await c.env.DB.prepare(
+      'SELECT * FROM chunks WHERE id = ? AND sessionId = ?'
+    )
+      .bind(chunkId, sessionId)
+      .first<Chunk>();
+    if (!chunk) {
+      return c.json({ error: 'Chunk not found' }, 404);
+    }
+
+    // Idempotency: image already recorded.
+    if (chunk.imageUrl) {
+      return c.json({ success: true, chunkId, imageUrl: chunk.imageUrl, idempotent: true });
+    }
+
+    const { url, error } = parseFalWebhook(body);
+    if (error || !url) {
+      await c.env.DB.prepare(
+        "UPDATE chunks SET status = 'failed', error = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND sessionId = ?"
+      )
+        .bind(error || 'Image generation failed', chunkId, sessionId)
+        .run();
+      console.warn(`fal webhook: chunk ${chunkId} failed — ${error}`);
+      return c.json({ success: false, error }, 200); // 200 so fal doesn't redeliver
+    }
+
+    await c.env.DB.prepare(
+      "UPDATE chunks SET imageUrl = ?, status = 'image-complete', updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND sessionId = ?"
+    )
+      .bind(url, chunkId, sessionId)
+      .run();
+
+    // Hand off to video generation.
+    await c.env.VIDEO_QUEUE.send({ type: 'video', chunkId, sessionId, imageUrl: url });
+    console.log(`fal webhook: chunk ${chunkId} image-complete → ${url}`);
+    return c.json({ success: true, chunkId, imageUrl: url });
+  } catch (error) {
+    console.error('Error in POST /api/webhooks/fal:', error);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
 // POST /api/webhooks/magnific - Receive video completion webhook
 app.post('/api/webhooks/magnific', async (c) => {
   try {
@@ -209,25 +261,32 @@ async function handleImageJob(msg: QueueMessage, env: Env): Promise<void> {
   const { chunkId, sessionId } = msg;
 
   const chunk = await env.DB.prepare(
-    'SELECT imagePrompt, videoPrompt FROM chunks WHERE id = ? AND sessionId = ?'
+    'SELECT imagePrompt FROM chunks WHERE id = ? AND sessionId = ?'
   )
     .bind(chunkId, sessionId)
-    .first<{ imagePrompt: string; videoPrompt: string }>();
+    .first<{ imagePrompt: string }>();
   if (!chunk) throw new Error(`Chunk not found: ${sessionId}/${chunkId}`);
 
   await setStatus(env, sessionId, chunkId, 'image-generating');
 
-  const imageUrl = await generateImage(chunk.imagePrompt, env);
+  const result = await startImageGeneration(
+    { prompt: chunk.imagePrompt, chunkId, sessionId },
+    env
+  );
 
-  await env.DB.prepare(
-    "UPDATE chunks SET imageUrl = ?, status = 'image-complete', updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND sessionId = ?"
-  )
-    .bind(imageUrl, chunkId, sessionId)
-    .run();
-  console.log(`Image complete for chunk ${chunkId}: ${imageUrl}`);
-
-  // Hand off to video generation.
-  await env.VIDEO_QUEUE.send({ type: 'video', chunkId, sessionId, imageUrl });
+  if (result.completedImageUrl) {
+    // Mock mode: image is ready now — store it and hand off to video.
+    await env.DB.prepare(
+      "UPDATE chunks SET imageUrl = ?, status = 'image-complete', updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND sessionId = ?"
+    )
+      .bind(result.completedImageUrl, chunkId, sessionId)
+      .run();
+    console.log(`Image complete (mock) for chunk ${chunkId}: ${result.completedImageUrl}`);
+    await env.VIDEO_QUEUE.send({ type: 'video', chunkId, sessionId, imageUrl: result.completedImageUrl });
+  } else {
+    // Production: submitted to fal queue — completion arrives via /api/webhooks/fal.
+    console.log(`Image generation submitted for chunk ${chunkId}, request ${result.requestId} (awaiting webhook)`);
+  }
 }
 
 async function handleVideoJob(msg: QueueMessage, env: Env): Promise<void> {
