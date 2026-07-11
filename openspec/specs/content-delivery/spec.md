@@ -59,6 +59,14 @@ The system SHALL surface generated image and video URLs to the UI. Video URLs fr
 - **WHEN** the UI queries status for a completed chunk
 - **THEN** the response includes a `videoUrl` that is directly playable/downloadable
 
+#### Scenario: Copy or open a media URL
+- **WHEN** a chunk has a generated image or video
+- **THEN** the UI SHALL provide, under each preview, a "Copy URL" control (copies the direct URL to the clipboard) and an "Open" link (opens the media in a new tab)
+
+#### Scenario: Right-click to copy the image URL
+- **WHEN** the user right-clicks a generated image
+- **THEN** the UI SHALL copy that image's direct URL to the clipboard and confirm with a transient notification
+
 #### Scenario: 24-hour expiry notice
 - **WHEN** a session shows completed videos
 - **THEN** the UI SHALL display that video links expire within 24 hours and should be downloaded

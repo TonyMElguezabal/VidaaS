@@ -231,6 +231,10 @@ vidaas/
 - **Videos are stored as RunningHub URLs**, which **expire 24 hours** after
   generation. The UI warns users to download within 24h. Re-hosting to R2 is
   deferred (Option B).
+- **Grabbing media URLs**: under each image/video preview the UI shows a
+  "Copy URL" button and an "Open ↗" link; right-clicking an image also copies
+  its URL. Copy uses the Clipboard API (with an `execCommand` fallback) and a
+  transient toast. The image URL is the persistent fal.ai CDN URL.
 - **Video params are fixed**: `aspectRatio 16:9`, `resolution 720p`,
   `duration 6` (RunningHub's minimum).
 - **Sessions live in D1** and are referenced from `localStorage` (URLs/refs
