@@ -64,16 +64,6 @@ export interface FalAiResponse {
   requestId: string;
 }
 
-export interface MagnificResponse {
-  data: {
-    task_id: string;
-    status: string;
-    generated?: Array<{
-      url: string;
-    }>;
-  };
-}
-
 export interface ApiStatus {
   sessionId: string;
   expiresAt: string;

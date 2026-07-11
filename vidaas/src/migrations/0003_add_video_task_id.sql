@@ -1,3 +1,3 @@
--- Persist the magnific.com task_id so the cron poller can reconcile
--- video-generating chunks even if the webhook never arrives.
+-- Persist the video provider's task_id so the cron poller can reconcile
+-- video-generating chunks by polling for their result.
 ALTER TABLE chunks ADD COLUMN videoTaskId TEXT;

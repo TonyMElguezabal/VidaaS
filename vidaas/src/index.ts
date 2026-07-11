@@ -5,7 +5,6 @@ import {
   startImageGeneration,
   startVideoGeneration,
   parseFalWebhook,
-  parseMagnificResult,
   checkVideoStatus,
 } from './lib/generation';
 import { Chunk, Session, ApiStatus, QueueMessage } from './types';
@@ -18,7 +17,7 @@ export type Env = {
   WEBHOOK_BASE_URL: string;
   ENVIRONMENT: string;
   FAL_API_KEY?: string;
-  MAGNIFIC_API_KEY?: string;
+  RUNNINGHUB_API_KEY?: string;
 };
 
 // Seconds to stagger successive image jobs, to avoid rate limits.
@@ -213,45 +212,12 @@ app.post('/api/webhooks/fal', async (c) => {
   }
 });
 
-// POST /api/webhooks/magnific - Receive video completion webhook (fast path;
-// the cron reconciler is the authoritative fallback if this never arrives).
-app.post('/api/webhooks/magnific', async (c) => {
-  try {
-    const chunkId = c.req.query('chunkId');
-    const sessionId = c.req.query('sessionId');
-    const body = await c.req.json();
-
-    if (!chunkId || !sessionId) {
-      return c.json({ error: 'Missing chunkId or sessionId in webhook URL' }, 400);
-    }
-
-    const chunk = await c.env.DB.prepare(
-      'SELECT * FROM chunks WHERE id = ? AND sessionId = ?'
-    )
-      .bind(chunkId, sessionId)
-      .first<Chunk>();
-    if (!chunk) {
-      return c.json({ error: 'Chunk not found' }, 404);
-    }
-
-    // Idempotency: already complete.
-    if (chunk.status === 'complete' && chunk.videoUrl) {
-      return c.json({ success: true, chunkId, videoUrl: chunk.videoUrl, idempotent: true });
-    }
-
-    // magnific webhook has NO `data` wrapper; generated[] holds URL strings.
-    const { status, videoUrl } = parseMagnificResult(body);
-    const outcome = await applyVideoResult(c.env, sessionId, chunkId, status, videoUrl);
-    return c.json({ success: outcome !== 'error', chunkId, status, videoUrl }, 200);
-  } catch (error) {
-    console.error('Error in POST /api/webhooks/magnific:', error);
-    return c.json({ error: 'Internal server error' }, 500);
-  }
-});
+// Note: RunningHub is poll-only (no webhook). Video completion is handled
+// entirely by the cron reconciler via checkVideoStatus + applyVideoResult.
 
 app.get('/health', (c) => c.json({ status: 'ok' }));
 
-// Shared video-completion logic used by both the webhook and the cron poller.
+// Applies a RunningHub video result to a chunk. Used by the cron poller.
 // Returns 'complete' | 'failed' | 'pending' | 'error'.
 async function applyVideoResult(
   env: Env,
@@ -261,7 +227,7 @@ async function applyVideoResult(
   videoUrl: string | undefined
 ): Promise<'complete' | 'failed' | 'pending' | 'error'> {
   const s = (status || '').toUpperCase();
-  if (s === 'COMPLETED' && videoUrl) {
+  if (s === 'SUCCESS' && videoUrl) {
     await env.DB.prepare(
       "UPDATE chunks SET videoUrl = ?, status = 'complete', updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND sessionId = ? AND status != 'complete'"
     )
@@ -278,7 +244,7 @@ async function applyVideoResult(
       .run();
     return 'failed';
   }
-  // CREATED / IN_PROGRESS / unknown-without-url → still pending.
+  // QUEUED / RUNNING / unknown-without-url → still pending.
   return status ? 'pending' : 'error';
 }
 
@@ -337,8 +303,8 @@ async function handleVideoJob(msg: QueueMessage, env: Env): Promise<void> {
   );
 
   // In mock mode the video is already "done" — complete it now.
-  // In production, store the task_id; completion arrives via the magnific
-  // webhook (fast path) or the cron reconciler (authoritative fallback).
+  // In production, store the RunningHub task_id; completion is detected by the
+  // cron reconciler polling RunningHub (poll-only — no webhook).
   if (result.completedVideoUrl) {
     await env.DB.prepare(
       "UPDATE chunks SET videoUrl = ?, status = 'complete', updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND sessionId = ?"
@@ -352,14 +318,14 @@ async function handleVideoJob(msg: QueueMessage, env: Env): Promise<void> {
     )
       .bind(result.taskId, chunkId, sessionId)
       .run();
-    console.log(`Video generation started for chunk ${chunkId}, task ${result.taskId} (awaiting webhook/cron)`);
+    console.log(`Video generation started for chunk ${chunkId}, task ${result.taskId} (awaiting cron poll)`);
   }
 }
 
 /**
- * Cron reconciler: find video-generating chunks with a stored magnific task_id
- * and poll magnific for their result. This is the authoritative completion path
- * (webhooks are a best-effort fast path).
+ * Cron reconciler: find video-generating chunks with a stored RunningHub task_id
+ * and poll RunningHub for their result. This is the sole completion path
+ * (RunningHub is poll-only — no webhook).
  */
 async function reconcileVideos(env: Env): Promise<void> {
   const rows = await env.DB.prepare(

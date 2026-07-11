@@ -1,11 +1,10 @@
-import { MagnificResponse } from '../types';
-import { getMockFalAiResponse, getMockMagnificResponse } from './mocks';
+import { getMockFalAiResponse, getMockVideoTaskId } from './mocks';
 
 export interface GenerationEnv {
   ENVIRONMENT: string;
   WEBHOOK_BASE_URL: string;
   FAL_API_KEY?: string;
-  MAGNIFIC_API_KEY?: string;
+  RUNNINGHUB_API_KEY?: string;
 }
 
 const useMocks = (env: GenerationEnv) => env.ENVIRONMENT !== 'production';
@@ -97,9 +96,12 @@ export interface VideoGenerationResult {
   completedVideoUrl?: string;
 }
 
+const RUNNINGHUB_SUBMIT = 'https://www.runninghub.ai/openapi/v2/rhart-video-g/image-to-video';
+const RUNNINGHUB_QUERY = 'https://www.runninghub.ai/openapi/v2/query';
+
 /**
- * Kick off video generation via magnific.com kling-v2.5-pro.
- * In production the result arrives asynchronously via webhook (returns taskId only).
+ * Kick off video generation via RunningHub (rhart-video-g/image-to-video).
+ * Poll-only — completion is detected by the cron reconciler via checkVideoStatus.
  * In mock mode returns a completedVideoUrl so the pipeline finishes locally.
  */
 export async function startVideoGeneration(
@@ -109,76 +111,80 @@ export async function startVideoGeneration(
   if (useMocks(env)) {
     console.log('[mock] startVideoGeneration for chunk', params.chunkId);
     await new Promise((r) => setTimeout(r, 500));
-    const taskId = getMockMagnificResponse().data.task_id;
+    const taskId = getMockVideoTaskId();
     return {
       taskId,
-      completedVideoUrl: `https://mock.magnific.com/videos/${taskId}.mp4`,
+      completedVideoUrl: `https://mock.runninghub.ai/videos/${taskId}.mp4`,
     };
   }
 
-  const webhookUrl = buildMagnificWebhookUrl(env.WEBHOOK_BASE_URL, params.sessionId, params.chunkId);
-  const response = await fetch('https://api.magnific.com/v1/ai/image-to-video/kling-v2-5-pro', {
+  const response = await fetch(RUNNINGHUB_SUBMIT, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-magnific-api-key': env.MAGNIFIC_API_KEY ?? '',
+      Authorization: `Bearer ${env.RUNNINGHUB_API_KEY ?? ''}`,
     },
     body: JSON.stringify({
-      webhook_url: webhookUrl,
-      image: params.imageUrl,
       prompt: params.prompt,
-      negative_prompt: 'low quality, blurry, distorted',
-      cfg_scale: 0.5,
-      duration: '5',
+      aspectRatio: '16:9',
+      imageUrls: [params.imageUrl],
       resolution: '720p',
+      duration: 6,
     }),
   });
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`magnific.com error ${response.status}: ${text}`);
+    throw new Error(`RunningHub error ${response.status}: ${text}`);
   }
 
-  const data = (await response.json()) as MagnificResponse;
-  const taskId = data.data?.task_id;
-  if (!taskId) throw new Error('magnific.com returned no task_id');
-  return { taskId };
+  const data = (await response.json()) as {
+    taskId?: string;
+    status?: string;
+    errorCode?: string;
+    errorMessage?: string;
+  };
+  if (data.errorCode) {
+    throw new Error(`RunningHub error ${data.errorCode}: ${data.errorMessage || ''}`);
+  }
+  if (!data.taskId) throw new Error('RunningHub returned no taskId');
+  return { taskId: data.taskId };
 }
 
-export function buildMagnificWebhookUrl(baseUrl: string, sessionId: string, chunkId: string): string {
-  const url = new URL('/api/webhooks/magnific', baseUrl);
-  url.searchParams.set('sessionId', sessionId);
-  url.searchParams.set('chunkId', chunkId);
-  return url.toString();
+interface RunningHubResult {
+  url?: string;
+  outputType?: string;
+  text?: string | null;
 }
 
 /**
- * Parse a magnific.com task result. Tolerant of both shapes:
- *  - GET status:  { data: { task_id, status, generated: ["<url>"] } }
- *  - webhook:     { task_id, status, generated: ["<url>"] }   (no data wrapper)
- * `generated` items are plain URL strings (older shapes used { url }).
+ * Parse a RunningHub /query response. Picks the mp4 result (fallback: first).
+ * Statuses: QUEUED | RUNNING | SUCCESS | FAILED.
  */
-export function parseMagnificResult(body: any): { status?: string; videoUrl?: string } {
-  const d = body?.data ?? body;
-  const first = d?.generated?.[0];
-  const videoUrl = typeof first === 'string' ? first : first?.url;
-  return { status: d?.status, videoUrl };
+export function parseRunningHubResult(body: any): { status?: string; videoUrl?: string } {
+  const results: RunningHubResult[] = Array.isArray(body?.results) ? body.results : [];
+  const mp4 = results.find((r) => r.outputType === 'mp4') ?? results[0];
+  return { status: body?.status, videoUrl: mp4?.url };
 }
 
 /**
- * Poll magnific.com for a task's current status/result.
- * Used by the cron reconciler as the authoritative completion path.
+ * Poll RunningHub for a task's current status/result.
+ * Used by the cron reconciler as the authoritative (and only) completion path.
  */
 export async function checkVideoStatus(
   taskId: string,
   env: GenerationEnv
 ): Promise<{ status?: string; videoUrl?: string }> {
-  const response = await fetch(
-    `https://api.magnific.com/v1/ai/image-to-video/kling-v2-5-pro/${taskId}`,
-    { headers: { 'x-magnific-api-key': env.MAGNIFIC_API_KEY ?? '' } }
-  );
+  const response = await fetch(RUNNINGHUB_QUERY, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${env.RUNNINGHUB_API_KEY ?? ''}`,
+    },
+    body: JSON.stringify({ taskId }),
+  });
   if (!response.ok) {
-    throw new Error(`magnific.com status error ${response.status}`);
+    throw new Error(`RunningHub status error ${response.status}`);
   }
-  return parseMagnificResult(await response.json());
+  return parseRunningHubResult(await response.json());
 }

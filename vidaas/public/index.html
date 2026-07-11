@@ -304,9 +304,9 @@ VIDEO: Warry notices the toxic leak and quickly steps back with a serious expres
 								${chunks.map(c => html`<${ChunkCard} key=${c.id} chunk=${c} onRetry=${retry} />`)}
 							</div>
 
-							${expiresAt && html`<p class="text-[11px] text-slate-400">
-								Links expire ${new Date(expiresAt).toLocaleString()}. Download anything you want to keep.
-							</p>`}
+							<p class="text-[11px] text-amber-600">
+								⚠ Video links expire within 24 hours — download anything you want to keep.
+							</p>
 						</section>`}
 
 					<footer class="mt-10 text-center text-[11px] text-slate-400">VidaaS MVP</footer>

@@ -6,7 +6,7 @@ API, deployment, ngrok), see [README.md](./README.md).
 ## What this is
 
 VidaaS turns scripted "chunks" into AI images (fal.ai) and short videos
-(magnific.com). It is a **single Cloudflare Worker**: `src/index.ts` exports
+(RunningHub). It is a **single Cloudflare Worker**: `src/index.ts` exports
 both a `fetch` handler (Hono HTTP API) and a `queue` handler (background job
 consumers). State lives in **Cloudflare D1**; a self-contained static SPA is
 served from `public/index.html` (React via htm + Tailwind, no build step).
@@ -21,18 +21,19 @@ Per-chunk state machine:
   purpose (kept simple; 30s staggering is done via queue `delaySeconds`).
 - **Mock mode is the default.** When `ENVIRONMENT !== 'production'`, no external
   APIs are called and no credits are spent (`src/lib/generation.ts`). In mock
-  mode video "completes" immediately via `completedVideoUrl`; in production it
-  completes asynchronously through `POST /api/webhooks/magnific`.
-- **Both image and video are async.** Image uses fal's **queue** endpoint
-  (`queue.fal.run/...?fal_webhook=`) → `/api/webhooks/fal`. The synchronous
-  `fal.run` endpoint times out with a 524 for this slow model — do not use it.
-  Video uses magnific + `/api/webhooks/magnific`, with a **cron reconciler**
-  (`* * * * *`) polling the magnific GET endpoint as the authoritative fallback.
-- **Webhook correlation** uses BOTH `sessionId` and `chunkId` query params
-  (chunk IDs are user-supplied and not globally unique). The webhook is
+  mode video "completes" immediately via `completedVideoUrl`; in production the
+  video completes when the cron reconciler polls RunningHub.
+- **Image is webhook-driven; video is poll-only.** Image uses fal's **queue**
+  endpoint (`queue.fal.run/...?fal_webhook=`) → `/api/webhooks/fal`. The
+  synchronous `fal.run` endpoint times out with a 524 for this slow model — do
+  not use it. Video uses **RunningHub** (`/openapi/v2/rhart-video-g/image-to-video`,
+  Bearer auth); there is **no video webhook** — the **cron reconciler** (`* * * * *`)
+  polls `POST /openapi/v2/query` and maps `SUCCESS → complete`.
+- **fal webhook correlation** uses BOTH `sessionId` and `chunkId` query params
+  (chunk IDs are user-supplied and not globally unique). The handler is
   idempotent — don't remove that guard.
-- **Videos are stored as magnific.com URLs** (MVP decision). R2 binding +
-  credentials exist but download-to-R2 is not wired yet.
+- **Videos are stored as RunningHub URLs that expire in 24h** (Option B). R2
+  re-hosting is not wired; the UI warns users to download within 24h.
 - **D1 database** id is pinned in `wrangler.jsonc`. Migrations are raw SQL files
   in `src/migrations/` applied via `wrangler d1 execute` (not the
   `d1 migrations` framework).
@@ -45,7 +46,7 @@ Per-chunk state machine:
 | `npm run db:migrate:local` | Apply schema to local D1 (run once) |
 | `npm run db:migrate:remote` | Apply schema to remote D1 (run once) |
 | `npm run typecheck` | `tsc --noEmit` |
-| `npm run ngrok` | Expose :8787 for real magnific webhooks |
+| `npm run ngrok` | Expose :8787 for real fal image webhooks |
 | `npm run queues:create` / `r2:create` | One-time infra for deploy |
 | `npm run deploy` | Deploy to Cloudflare (needs Workers Paid plan for Queues) |
 
@@ -60,11 +61,14 @@ Run `wrangler types` after changing bindings in `wrangler.jsonc`.
   directly instead of self-POSTing a webhook.
 - **`0002_add_error_column.sql`** is an `ALTER TABLE ADD COLUMN`; it errors if
   run twice (column exists) — safe to ignore on re-run.
-- **magnific webhook shape**: the callback is the GET response *minus* the
-  `data` wrapper, and `generated` is an array of plain URL **strings** (not
-  `{url}` objects). GET status: `GET /v1/ai/image-to-video/kling-v2-5-pro/{task_id}`
-  → `{ data: { status, generated: ["<mp4 url>"] } }`. `parseMagnificResult`
-  tolerates both shapes.
+- **RunningHub video (poll-only)**: submit `POST /openapi/v2/rhart-video-g/image-to-video`
+  (Bearer) with `{prompt, aspectRatio:"16:9", imageUrls:[falUrl], resolution:"720p",
+  duration:6}` → `{taskId, status:"QUEUED"}`. Poll `POST /openapi/v2/query {taskId}`
+  → `{status, results:[{url, outputType:"mp4"}]}`. Statuses: QUEUED/RUNNING/SUCCESS/FAILED.
+  `imageUrls` accepts public URLs (no upload). Result URLs expire in 24h.
+- **`global_fetch_strictly_public`** compat flag also means mock mode returns the
+  completed video URL directly (no self-POST); real image completion comes via
+  fal's inbound webhook, which is fine.
 - **Cloudflare Queues require the Workers Paid plan** — `wrangler deploy` fails
   otherwise.
 - After editing `wrangler.jsonc` bindings, regenerate types and restart `dev`.

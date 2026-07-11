@@ -1,4 +1,4 @@
-import { FalAiResponse, MagnificResponse } from '../types';
+import { FalAiResponse } from '../types';
 
 // Mock responses based on POC results
 export function getMockFalAiResponse(): FalAiResponse {
@@ -19,32 +19,7 @@ export function getMockFalAiResponse(): FalAiResponse {
   };
 }
 
-export function getMockMagnificResponse(): MagnificResponse {
-  return {
-    data: {
-      task_id: `mock-task-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      status: 'CREATED',
-      generated: [],
-    },
-  };
-}
-
-export function getMockMagnificWebhookPayload(taskId: string): {
-  data: {
-    task_id: string;
-    status: string;
-    generated: Array<{ url: string }>;
-  };
-} {
-  return {
-    data: {
-      task_id: taskId,
-      status: 'COMPLETED',
-      generated: [
-        {
-          url: `https://example.magnific.com/videos/mock/${Math.random().toString(36).slice(2)}.mp4`,
-        },
-      ],
-    },
-  };
+// Mock video task id for local (mock-mode) video generation.
+export function getMockVideoTaskId(): string {
+  return `mock-task-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
